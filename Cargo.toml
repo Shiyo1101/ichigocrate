@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["core", "app"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["Rust port of IchigoJam BASIC"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
