@@ -6,6 +6,42 @@
 //! - 直前に表示した未確定ローマ字を BS (0x08) で消し、確定したカナを
 //!   差し替える挙動も含めて再現する。
 //! - 状態として 2 文字分のリングバッファ (`buf0`, `buf1`) を持つ。
+//! - 1 入力あたりの出力は最大 5 バイト (例: `DHA` → BS, BS, テ, ゛, ャ)。
+//!   ヒープ確保を避けるため固定サイズの [`KanaOutput`] を返す。
+
+/// `romajikana_input` の出力。最大 5 バイトの半固定列。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KanaOutput {
+    bytes: [u8; 6],
+    len: u8,
+}
+
+impl KanaOutput {
+    fn push(&mut self, b: u8) {
+        let i = self.len as usize;
+        debug_assert!(i < self.bytes.len(), "KanaOutput overflow");
+        self.bytes[i] = b;
+        self.len += 1;
+    }
+
+    /// 出力済みのスライスを返す。
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
+    /// 出力が空かどうか。
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl<'a> IntoIterator for &'a KanaOutput {
+    type Item = u8;
+    type IntoIter = std::iter::Copied<std::slice::Iter<'a, u8>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter().copied()
+    }
+}
 
 /// 1 文字の入力を受け取り、画面に流すべきバイト列を返す。
 ///
@@ -13,7 +49,7 @@
 /// 含まれる。呼び出し側は順にスクリーンへ流せばよい。
 ///
 /// `buf0` / `buf1` は呼出元が持つ未確定ローマ字バッファ (初期値 0)。
-pub fn romajikana_input(buf0: &mut u8, buf1: &mut u8, k_in: u8) -> Vec<u8> {
+pub fn romajikana_input(buf0: &mut u8, buf1: &mut u8, k_in: u8) -> KanaOutput {
     let mut k: u8 = k_in;
     if k.is_ascii_lowercase() {
         k = k - b'a' + b'A';
@@ -36,8 +72,8 @@ pub fn romajikana_input(buf0: &mut u8, buf1: &mut u8, k_in: u8) -> Vec<u8> {
         _ => {}
     }
 
-    let a2z = (b'A'..=b'Z').contains(&k);
-    let mut out: Vec<u8> = Vec::new();
+    let a2z = k.is_ascii_uppercase();
+    let mut out = KanaOutput::default();
 
     if *buf0 == 0 {
         if m >= 0 {
@@ -157,88 +193,86 @@ pub fn romajikana_input(buf0: &mut u8, buf1: &mut u8, k_in: u8) -> Vec<u8> {
         } else {
             *buf0 = 0;
         }
-    } else {
-        if m >= 0 {
-            out.push(8);
-            out.push(8);
-            if (*buf0 == b'C' || *buf0 == b'S') && *buf1 == b'H' {
-                // ちゃちちゅちぇちょ / しゃししゅしぇしょ
-                out.push(if *buf0 == b'C' { 0xc1 } else { 0xbc });
-                if m == 1 {
-                    k = 0;
-                } else if m == 3 {
-                    k = 0xaa;
-                } else {
-                    k = 0xac + (m as u8 >> 1);
-                }
-            } else if *buf0 == b'T' && *buf1 == b'S' && m == 2 {
-                k = 0xc2; // ツ
-            } else if (*buf0 == b'L' || *buf0 == b'X') && *buf1 == b'T' && m == 2 {
-                k = 0xaf; // ッ
-            } else if (*buf0 == b'T' || *buf0 == b'D') && *buf1 == b'H' {
-                out.push(0xc3); // テ
-                if *buf0 == b'D' {
+    } else if m >= 0 {
+        out.push(8);
+        out.push(8);
+        if (*buf0 == b'C' || *buf0 == b'S') && *buf1 == b'H' {
+            // ちゃちちゅちぇちょ / しゃししゅしぇしょ
+            out.push(if *buf0 == b'C' { 0xc1 } else { 0xbc });
+            if m == 1 {
+                k = 0;
+            } else if m == 3 {
+                k = 0xaa;
+            } else {
+                k = 0xac + (m as u8 >> 1);
+            }
+        } else if *buf0 == b'T' && *buf1 == b'S' && m == 2 {
+            k = 0xc2; // ツ
+        } else if (*buf0 == b'L' || *buf0 == b'X') && *buf1 == b'T' && m == 2 {
+            k = 0xaf; // ッ
+        } else if (*buf0 == b'T' || *buf0 == b'D') && *buf1 == b'H' {
+            out.push(0xc3); // テ
+            if *buf0 == b'D' {
+                out.push(0xde);
+            }
+            if (m & 1) == 0 {
+                k = 0xac + (m as u8 >> 1);
+            } else {
+                k = 0xa7 + m as u8;
+            }
+        } else if *buf1 == b'Y' {
+            match *buf0 {
+                b'K' | b'C' => out.push(0xb6 + 1),
+                b'S' => out.push(0xbb + 1),
+                b'T' => out.push(0xc0 + 1),
+                b'N' => out.push(0xc5 + 1),
+                b'H' => out.push(0xca + 1),
+                b'F' => out.push(0xca + 2),
+                b'J' => {
+                    out.push(0xbc);
                     out.push(0xde);
                 }
-                if (m & 1) == 0 {
-                    k = 0xac + (m as u8 >> 1);
-                } else {
-                    k = 0xa7 + m as u8;
+                b'M' => out.push(0xcf + 1),
+                b'R' => out.push(0xd7 + 1),
+                b'G' => {
+                    out.push(0xb6 + 1);
+                    out.push(0xde);
                 }
-            } else if *buf1 == b'Y' {
-                match *buf0 {
-                    b'K' | b'C' => out.push(0xb6 + 1),
-                    b'S' => out.push(0xbb + 1),
-                    b'T' => out.push(0xc0 + 1),
-                    b'N' => out.push(0xc5 + 1),
-                    b'H' => out.push(0xca + 1),
-                    b'F' => out.push(0xca + 2),
-                    b'J' => {
-                        out.push(0xbc);
-                        out.push(0xde);
-                    }
-                    b'M' => out.push(0xcf + 1),
-                    b'R' => out.push(0xd7 + 1),
-                    b'G' => {
-                        out.push(0xb6 + 1);
-                        out.push(0xde);
-                    }
-                    b'Z' => {
-                        out.push(0xbb + 1);
-                        out.push(0xde);
-                    }
-                    b'D' => {
-                        out.push(0xc0 + 1);
-                        out.push(0xde);
-                    }
-                    b'B' => {
-                        out.push(0xca + 1);
-                        out.push(0xde);
-                    }
-                    b'P' => {
-                        out.push(0xca + 1);
-                        out.push(0xdf);
-                    }
-                    _ => {}
+                b'Z' => {
+                    out.push(0xbb + 1);
+                    out.push(0xde);
                 }
-                if (m & 1) == 0 {
-                    k = 0xac + (m as u8 >> 1);
-                } else {
-                    k = 0xa7 + m as u8;
+                b'D' => {
+                    out.push(0xc0 + 1);
+                    out.push(0xde);
                 }
-            } else {
-                k = 0;
+                b'B' => {
+                    out.push(0xca + 1);
+                    out.push(0xde);
+                }
+                b'P' => {
+                    out.push(0xca + 1);
+                    out.push(0xdf);
+                }
+                _ => {}
             }
-            *buf0 = 0;
-            *buf1 = 0;
-        } else if a2z {
-            *buf0 = *buf1;
-            *buf1 = k;
-        } else if k == 8 {
-            *buf1 = 0;
+            if (m & 1) == 0 {
+                k = 0xac + (m as u8 >> 1);
+            } else {
+                k = 0xa7 + m as u8;
+            }
         } else {
-            *buf0 = 0;
+            k = 0;
         }
+        *buf0 = 0;
+        *buf1 = 0;
+    } else if a2z {
+        *buf0 = *buf1;
+        *buf1 = k;
+    } else if k == 8 {
+        *buf1 = 0;
+    } else {
+        *buf0 = 0;
     }
 
     if k != 0 {
@@ -257,7 +291,7 @@ mod tests {
         let mut emitted: Vec<u8> = Vec::new();
         for c in s.bytes() {
             let r = romajikana_input(&mut buf0, &mut buf1, c);
-            for b in r {
+            for b in &r {
                 if b == 8 {
                     emitted.pop();
                 } else {
