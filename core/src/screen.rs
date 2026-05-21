@@ -4,6 +4,40 @@ use crate::font::CHAR_PATTERN_JP;
 use crate::machine::{calc_div, Machine};
 use crate::ram::*;
 
+// ============================================================
+// VRAM/REPL で使う制御コード (IchigoJam 標準準拠)
+// ============================================================
+//
+// 元 C 実装は数値リテラルを直書きしていたため、ここで意味のある名前を
+// 与えてマッチ式の意図を明らかにする。
+
+/// FF: カーソル以降を消去
+const CC_FORM_FEED: u8 = 12;
+/// カナモードのトグル
+const CC_KANA_TOGGLE: u8 = 15;
+/// 挿入モードのトグル
+const CC_INSERT_TOGGLE: u8 = 17;
+/// 行分割 (簡略化のため改行扱い)
+const CC_LINE_SPLIT: u8 = 0x10;
+/// LOCATE モードに入る (続く 2 文字を座標として解釈)
+const CC_LOCATE_PREFIX: u8 = 21;
+const CC_BACKSPACE: u8 = 0x08;
+const CC_DELETE: u8 = 0x7f;
+const CC_CURSOR_LEFT: u8 = 28;
+const CC_CURSOR_RIGHT: u8 = 29;
+const CC_CURSOR_UP: u8 = 30;
+const CC_CURSOR_DOWN: u8 = 31;
+
+// screen_scroll の方向 (LOCATE/SCROLL 経由で渡される数値)
+const SCROLL_LEFT: i32 = 28;
+const SCROLL_RIGHT: i32 = 29;
+const SCROLL_UP: i32 = 30;
+const SCROLL_DOWN: i32 = 31;
+
+/// PCG 領域に格納される 0x80..0x90 の特殊文字範囲 (ピクセル描画用)。
+const PCG_PIXEL_BASE: u8 = 128;
+const PCG_PIXEL_RANGE: std::ops::Range<u8> = PCG_PIXEL_BASE..(PCG_PIXEL_BASE + 16);
+
 impl Machine {
     /// VRAM の生バッファ
     pub fn vram(&self) -> &[u8] {
@@ -71,24 +105,21 @@ impl Machine {
     pub fn screen_scroll(&mut self, n: i32) {
         let w = self.screenw;
         let h = self.screenh;
-        let v = self.vram_mut();
+        // SCROLL コマンドは 0..=3 と 28..=31 のどちらの形式でも受ける。
         let dir = match n {
-            0 | 30 => 30,
-            1 | 29 => 29,
-            2 | 31 => 31,
-            3 | 28 => 28,
+            0 | SCROLL_UP => SCROLL_UP,
+            1 | SCROLL_RIGHT => SCROLL_RIGHT,
+            2 | SCROLL_DOWN => SCROLL_DOWN,
+            3 | SCROLL_LEFT => SCROLL_LEFT,
             _ => return,
         };
+        let v = self.vram_mut();
         match dir {
-            30 => {
-                // UP
+            SCROLL_UP => {
                 v.copy_within(w..w * h, 0);
-                for b in &mut v[(h - 1) * w..h * w] {
-                    *b = 0;
-                }
+                v[(h - 1) * w..h * w].fill(0);
             }
-            29 => {
-                // RIGHT
+            SCROLL_RIGHT => {
                 for i in (0..w - 1).rev() {
                     for j in 0..h {
                         v[j * w + (i + 1)] = v[j * w + i];
@@ -98,17 +129,13 @@ impl Machine {
                     v[j * w] = 0;
                 }
             }
-            31 => {
-                // DOWN
+            SCROLL_DOWN => {
                 for i in (0..h - 1).rev() {
                     v.copy_within(i * w..(i + 1) * w, (i + 1) * w);
                 }
-                for b in &mut v[0..w] {
-                    *b = 0;
-                }
+                v[0..w].fill(0);
             }
-            28 => {
-                // LEFT
+            SCROLL_LEFT => {
                 for i in 1..w {
                     for j in 0..h {
                         v[j * w + (i - 1)] = v[j * w + i];
@@ -159,8 +186,7 @@ impl Machine {
                 loop {
                     let cy = self.cursory;
                     let line_end = (cy as usize + 1) * w - 1;
-                    let v = self.vram();
-                    if v[line_end] == 0 {
+                    if self.vram()[line_end] == 0 {
                         break;
                     } else if cy == h as i32 - 1 {
                         self.screen_enter();
@@ -174,22 +200,24 @@ impl Machine {
                 self.screen_putc(b' ');
                 self.screen_putc(b' ');
             }
-            0x08 | 0x7f => {
-                // backspace / delete
-                if c == 0x7f {
-                    // delete in place: skip cursor move
-                } else if self.cursorx > 0 {
-                    self.cursorx -= 1;
-                } else if self.cursory > 0
-                    && self.vram()[self.cursory as usize * w - 1] != 0
-                {
-                    self.cursory -= 1;
-                    self.cursorx = w as i32 - 1;
-                } else {
-                    return;
+            CC_BACKSPACE | CC_DELETE => {
+                // DEL: その場の文字を詰めるだけでカーソルは動かさない。
+                // BS : 1 文字前へ戻った上で詰める。
+                if c == CC_BACKSPACE {
+                    if self.cursorx > 0 {
+                        self.cursorx -= 1;
+                    } else if self.cursory > 0
+                        && self.vram()[self.cursory as usize * w - 1] != 0
+                    {
+                        self.cursory -= 1;
+                        self.cursorx = w as i32 - 1;
+                    } else {
+                        return;
+                    }
                 }
                 let mut i = self.cursory as usize * w + self.cursorx as usize;
-                while i < w * h - 1 {
+                let last = w * h - 1;
+                while i < last {
                     let v = self.vram_mut();
                     if v[i] == 0 {
                         break;
@@ -197,12 +225,11 @@ impl Machine {
                     v[i] = v[i + 1];
                     i += 1;
                 }
-                if i == w * h - 1 {
+                if i == last {
                     self.vram_mut()[i] = 0;
                 }
             }
-            28 => {
-                // LEFT
+            CC_CURSOR_LEFT => {
                 if self.cursorx > 0 {
                     self.cursorx -= 1;
                 } else if self.cursory > 0
@@ -213,52 +240,44 @@ impl Machine {
                     self.cursorx = w as i32 - 1;
                 }
             }
-            29 => {
-                // RIGHT
-                if (self.cursorx != w as i32 - 1 || self.cursory != h as i32 - 1)
-                    && (self.vram()
-                        [self.cursory as usize * w + self.cursorx as usize]
-                        != 0
-                        || self.screen_insertmode)
-                    {
-                        self.cursorx += 1;
-                        if self.cursorx == w as i32 {
-                            self.cursorx = 0;
-                            self.cursory += 1;
-                        }
+            CC_CURSOR_RIGHT => {
+                let at_last_cell =
+                    self.cursorx == w as i32 - 1 && self.cursory == h as i32 - 1;
+                let current_idx = self.cursory as usize * w + self.cursorx as usize;
+                let movable = !at_last_cell
+                    && (self.vram()[current_idx] != 0 || self.screen_insertmode);
+                if movable {
+                    self.cursorx += 1;
+                    if self.cursorx == w as i32 {
+                        self.cursorx = 0;
+                        self.cursory += 1;
                     }
+                }
             }
-            30 => {
-                // UP
+            CC_CURSOR_UP => {
                 if self.cursory > 0 {
                     self.cursory -= 1;
                 }
             }
-            31 => {
-                // DOWN
+            CC_CURSOR_DOWN => {
                 if self.cursory < h as i32 - 1 {
                     self.cursory += 1;
                 }
             }
-            0x10 => {
-                // 行分割。簡略化のため改行扱い
+            CC_LINE_SPLIT => {
                 self.screen_enter();
             }
-            12 => {
-                // FF: カーソル以降を消去
+            CC_FORM_FEED => {
                 let now = self.cursory as usize * w + self.cursorx as usize;
-                let total = w * h;
-                for b in &mut self.vram_mut()[now..total] {
-                    *b = 0;
-                }
+                self.vram_mut()[now..w * h].fill(0);
             }
-            21 => {
+            CC_LOCATE_PREFIX => {
                 self.screen_locatemode = 2;
             }
-            15 => {
+            CC_KANA_TOGGLE => {
                 self.key_kana = !self.key_kana;
             }
-            17 => {
+            CC_INSERT_TOGGLE => {
                 self.key_insert = !self.key_insert;
             }
             _ => {
@@ -352,20 +371,22 @@ impl Machine {
         }
         let idx = (x >> 1) as usize + (y >> 1) as usize * w as usize;
         let mut p = self.vram_mut()[idx];
-        let n = (x & 1) as u32 + ((y & 1) as u32) * 2;
+        let bit = (x & 1) as u32 + ((y & 1) as u32) * 2;
         if cmd == 3 {
-            if !(128..128 + 16).contains(&p) && p != 0 {
-                p = 128 + 15;
+            // POINT: ピクセル状態の読み出し。
+            // 既に文字が描かれているセルは「全 ON」として扱う (= 0x8F)。
+            if !PCG_PIXEL_RANGE.contains(&p) && p != 0 {
+                p = PCG_PIXEL_BASE + 15;
             }
-            return ((p as u32) & (1u32 << n)) >> n;
+            return ((p as u32) & (1u32 << bit)) >> bit;
         }
-        if !(128..128 + 16).contains(&p) {
-            p = 128;
+        if !PCG_PIXEL_RANGE.contains(&p) {
+            p = PCG_PIXEL_BASE;
         }
         match cmd {
-            0 => p &= !(1u8 << n),
-            1 => p |= 1u8 << n,
-            2 => p ^= 1u8 << n,
+            0 => p &= !(1u8 << bit),
+            1 => p |= 1u8 << bit,
+            2 => p ^= 1u8 << bit,
             _ => {}
         }
         self.vram_mut()[idx] = p;
