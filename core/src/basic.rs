@@ -47,10 +47,7 @@ impl Machine {
             // LIST 領域では、ステートメントは偶数バイトに揃えられ、奇数位置に
             // 終端 NULL がある。偶数 PC で NULL に当たった場合 (= 統計詰めの
             // パディング NULL) は +1 して実際の終端へ進める (C 版 AddrIsOdd 相当)。
-            if self.pc >= OFFSET_RAM_LIST
-                && self.pc < OFFSET_RAM_LIST + SIZE_RAM_LIST
-                && (self.pc & 1) == (OFFSET_RAM_LIST & 1)
-            {
+            if self.pc_in_list() && (self.pc & 1) == (OFFSET_RAM_LIST & 1) {
                 self.pc += 1;
             }
             if self.pc >= OFFSET_RAM_LIST
@@ -146,12 +143,8 @@ impl Machine {
                 return BasicResult::Execute;
             }
             // 即時入力 → プログラム実行への遷移を検知
-            if !started_in_list {
-                let in_list = self.pc >= OFFSET_RAM_LIST
-                    && self.pc < OFFSET_RAM_LIST + SIZE_RAM_LIST;
-                if in_list {
-                    return BasicResult::Execute;
-                }
+            if !started_in_list && self.pc_in_list() {
+                return BasicResult::Execute;
             }
         }
     }
@@ -170,9 +163,7 @@ impl Machine {
 
     fn command_edit(&mut self, number: i16) {
         // 実行中 (pc が LIST 内) であれば文法エラー
-        if number <= 0
-            || (self.pc >= OFFSET_RAM_LIST && self.pc < OFFSET_RAM_LIST + IJB_SIZEOF_LIST)
-        {
+        if number <= 0 || self.pc_in_list() {
             self.command_error(ERR_SYNTAX_ERROR);
             return;
         }
@@ -372,6 +363,91 @@ impl Machine {
 
     pub fn token_back(&mut self) {
         self.pc = self.lasttoken;
+    }
+
+    // ============================================================
+    // 共通パーサヘルパ
+    //
+    // 元 C 実装は同じ手続きが個別の文ごとに散らばっていたため、頻出
+    // パターンを以下のヘルパに集約する。いずれもエラー時は `self.err`
+    // を立て、戻り値で「呼出元は return すべきか」を伝える。
+    // ============================================================
+
+    /// 次のトークンが期待コードと一致しなければ Syntax error を立てる。
+    fn expect_token(&mut self, code: u16) -> bool {
+        if self.token_get().code == code {
+            true
+        } else {
+            self.command_error(ERR_SYNTAX_ERROR);
+            false
+        }
+    }
+
+    /// 関数呼出の閉じ括弧 `)` を消費する。
+    fn expect_paren_close(&mut self) -> bool {
+        self.expect_token(TOKEN_PAREN_E)
+    }
+
+    /// `VAR` または `ARRAY` を読んで「変数領域でのインデックス」を返す。
+    /// 構文エラー・添字エラーが発生した場合は `None`。
+    fn parse_lvalue_index(&mut self) -> Option<usize> {
+        let t = self.token_get();
+        match t.code {
+            TOKEN_VAR => Some(t.value as usize),
+            TOKEN_ARRAY => {
+                let i = self.token_get_array_index();
+                if self.err != 0 {
+                    None
+                } else {
+                    Some(i)
+                }
+            }
+            _ => {
+                self.command_error(ERR_SYNTAX_ERROR);
+                None
+            }
+        }
+    }
+
+    /// 行末 (TOKEN_NULL / TOKEN_ELSE) であれば `default` を返し、そうでなければ
+    /// 式を 1 つ読んでその値を返す。エラー時は `None`。
+    fn parse_optional_expr(&mut self, default: i16) -> Option<i16> {
+        let code = self.token_get().code;
+        self.token_back();
+        if code == TOKEN_NULL || code == TOKEN_ELSE {
+            return Some(default);
+        }
+        let v = self.token_expression();
+        if self.err != 0 {
+            return None;
+        }
+        Some(v)
+    }
+
+    /// `HEX$/BIN$/DEC$/STR$` のような「`expr` または `expr,m` の後に `)`」
+    /// という関数呼出をパースする。
+    fn parse_format_args(&mut self, default_m: i16) -> Option<(i16, i16)> {
+        let n = self.token_expression();
+        if self.err != 0 {
+            return None;
+        }
+        let t = self.token_get();
+        let m = if t.code == TOKEN_COMMA {
+            let m = self.token_expression();
+            if self.err != 0 {
+                return None;
+            }
+            if !self.expect_paren_close() {
+                return None;
+            }
+            m
+        } else if t.code == TOKEN_PAREN_E {
+            default_m
+        } else {
+            self.command_error(ERR_SYNTAX_ERROR);
+            return None;
+        };
+        Some((n, m))
     }
 
     fn token_get_array_index(&mut self) -> usize {
@@ -714,12 +790,7 @@ impl Machine {
             }
             TOKEN_FILE => self.lastfile as i16,
             TOKEN_LINE => {
-                let pc2 = if self.pc >= OFFSET_RAM_LIST && self.pc < OFFSET_RAM_LIST + SIZE_RAM_LIST
-                {
-                    self.pc
-                } else {
-                    self.pcbreak
-                };
+                let pc2 = if self.pc_in_list() { self.pc } else { self.pcbreak };
                 if (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&pc2) {
                     let mut index: u16 = 0;
                     loop {
@@ -972,21 +1043,7 @@ impl Machine {
         self.forstack[self.nforstack as usize] = self.pc;
         self.nforstack += 1;
 
-        let t = self.token_get();
-        let v: usize = match t.code {
-            TOKEN_VAR => t.value as usize,
-            TOKEN_ARRAY => {
-                let i = self.token_get_array_index();
-                if self.err != 0 {
-                    return;
-                }
-                i
-            }
-            _ => {
-                self.command_error(ERR_SYNTAX_ERROR);
-                return;
-            }
-        };
+        let Some(v) = self.parse_lvalue_index() else { return };
         let t = self.token_get();
         if t.code != TOKEN_EQ && t.code != TOKEN_COMMA {
             self.command_error(ERR_SYNTAX_ERROR);
@@ -1030,21 +1087,7 @@ impl Machine {
         self.token_end();
         let bkpc = self.pc;
         self.pc = self.forstack[self.nforstack as usize - 1];
-        let t = self.token_get();
-        let v: usize = match t.code {
-            TOKEN_VAR => t.value as usize,
-            TOKEN_ARRAY => {
-                let i = self.token_get_array_index();
-                if self.err != 0 {
-                    return;
-                }
-                i
-            }
-            _ => {
-                self.command_error(ERR_SYNTAX_ERROR);
-                return;
-            }
-        };
+        let Some(v) = self.parse_lvalue_index() else { return };
         let t = self.token_get();
         if t.code != TOKEN_EQ && t.code != TOKEN_COMMA {
             self.command_error(ERR_SYNTAX_ERROR);
@@ -1141,10 +1184,10 @@ impl Machine {
 
     fn command_cont(&mut self) {
         self.token_end();
-        if self.pc < OFFSET_RAM_LIST || self.pc >= OFFSET_RAM_LIST + 1026 {
+        if !self.pc_in_list() {
             self.pc = self.pcbreak;
         }
-        if self.pc >= OFFSET_RAM_LIST && self.pc < OFFSET_RAM_LIST + SIZE_RAM_LIST {
+        if self.pc_in_list() {
             let mut index: u16 = 0;
             loop {
                 let n = self.list_get_number(index);
@@ -1193,150 +1236,19 @@ impl Machine {
                     break;
                 },
                 TOKEN_DEC => {
-                    let n2 = self.token_expression();
-                    if self.err != 0 {
-                        return;
-                    }
-                    let mut m: i16 = 0;
-                    let t = self.token_get();
-                    if t.code == TOKEN_COMMA {
-                        m = self.token_expression();
-                        if self.err != 0 {
-                            return;
-                        }
-                        let t = self.token_get();
-                        if t.code != TOKEN_PAREN_E {
-                            self.command_error(ERR_SYNTAX_ERROR);
-                            return;
-                        }
-                    } else if t.code != TOKEN_PAREN_E {
-                        self.command_error(ERR_SYNTAX_ERROR);
-                        return;
-                    }
-                    if m <= 0 {
-                        self.put_num(n2 as i32);
-                    } else {
-                        let beam = Machine::beam(n2 as i32);
-                        if beam as i16 <= m {
-                            for _ in 0..(m as u32 - beam) {
-                                self.put_chr(b' ');
-                            }
-                            self.put_num(n2 as i32);
-                        } else {
-                            let mut n2 = n2 as i32;
-                            if n2 < 0 {
-                                n2 = -n2;
-                            }
-                            let mut beam = 5i32;
-                            let mut d: u32 = 10000;
-                            while d > 0 {
-                                let c = (n2 as u32) / d;
-                                if beam <= m as i32 {
-                                    self.put_chr(c as u8 + b'0');
-                                }
-                                n2 -= (c * d) as i32;
-                                beam -= 1;
-                                d /= 10;
-                            }
-                        }
-                    }
+                    let Some((n2, m)) = self.parse_format_args(0) else { return };
+                    self.print_dec(n2, m);
                 }
                 TOKEN_HEX => {
-                    let n2 = self.token_expression() as u16;
-                    if self.err != 0 {
-                        return;
-                    }
-                    let mut m: i16 = 0;
-                    let t = self.token_get();
-                    if t.code == TOKEN_COMMA {
-                        m = self.token_expression();
-                        if self.err != 0 {
-                            return;
-                        }
-                        let t = self.token_get();
-                        if t.code != TOKEN_PAREN_E {
-                            self.command_error(ERR_SYNTAX_ERROR);
-                            return;
-                        }
-                    } else if t.code != TOKEN_PAREN_E {
-                        self.command_error(ERR_SYNTAX_ERROR);
-                        return;
-                    }
-                    if m == 0 {
-                        let mut n3 = n2;
-                        loop {
-                            m += 1;
-                            n3 >>= 4;
-                            if n3 == 0 {
-                                break;
-                            }
-                        }
-                    }
-                    for i in (0..m).rev() {
-                        let h = (n2 >> (i * 4)) & 0xf;
-                        if h >= 10 {
-                            self.put_chr((h as u8) + b'A' - 10);
-                        } else {
-                            self.put_chr((h as u8) + b'0');
-                        }
-                    }
+                    let Some((n2, m)) = self.parse_format_args(0) else { return };
+                    self.print_radix(n2 as u16, m, 4);
                 }
                 TOKEN_BIN => {
-                    let n2 = self.token_expression() as u16;
-                    if self.err != 0 {
-                        return;
-                    }
-                    let mut m: i16 = 0;
-                    let t = self.token_get();
-                    if t.code == TOKEN_COMMA {
-                        m = self.token_expression();
-                        if self.err != 0 {
-                            return;
-                        }
-                        let t = self.token_get();
-                        if t.code != TOKEN_PAREN_E {
-                            self.command_error(ERR_SYNTAX_ERROR);
-                            return;
-                        }
-                    } else if t.code != TOKEN_PAREN_E {
-                        self.command_error(ERR_SYNTAX_ERROR);
-                        return;
-                    }
-                    if m == 0 {
-                        let mut n3 = n2;
-                        loop {
-                            m += 1;
-                            n3 >>= 1;
-                            if n3 == 0 {
-                                break;
-                            }
-                        }
-                    }
-                    for i in (0..m).rev() {
-                        self.put_chr(b'0' + ((n2 >> i) & 1) as u8);
-                    }
+                    let Some((n2, m)) = self.parse_format_args(0) else { return };
+                    self.print_radix(n2 as u16, m, 1);
                 }
                 TOKEN_STR => {
-                    let n = self.token_expression();
-                    if self.err != 0 {
-                        return;
-                    }
-                    let mut m: i16 = -1;
-                    let t = self.token_get();
-                    if t.code == TOKEN_COMMA {
-                        m = self.token_expression();
-                        if self.err != 0 {
-                            return;
-                        }
-                        let t = self.token_get();
-                        if t.code != TOKEN_PAREN_E {
-                            self.command_error(ERR_SYNTAX_ERROR);
-                            return;
-                        }
-                    } else if t.code != TOKEN_PAREN_E {
-                        self.command_error(ERR_SYNTAX_ERROR);
-                        return;
-                    }
+                    let Some((n, m)) = self.parse_format_args(-1) else { return };
                     self.put_strmem(n as i32, m);
                 }
                 TOKEN_ERROR => {
@@ -1427,9 +1339,7 @@ impl Machine {
         if self.err != 0 {
             return;
         }
-        for b in &mut self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST] {
-            *b = 0;
-        }
+        self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.listsize = 0;
         self.pc = PC_NULL;
         self.pcbreak = PC_NULL;
@@ -1700,15 +1610,7 @@ impl Machine {
     // ============================================================
 
     fn command_save(&mut self) {
-        let mut n = self.lastfile as i16;
-        let code = self.token_get().code;
-        self.token_back();
-        if code != TOKEN_NULL && code != TOKEN_ELSE {
-            n = self.token_expression();
-            if self.err != 0 {
-                return;
-            }
-        }
+        let Some(n) = self.parse_optional_expr(self.lastfile as i16) else { return };
         self.token_end();
         if self.err != 0 {
             return;
@@ -1734,15 +1636,7 @@ impl Machine {
     }
 
     fn command_load(&mut self, lrun: bool) {
-        let mut n = self.lastfile as i16;
-        let code = self.token_get().code;
-        self.token_back();
-        if code != TOKEN_NULL && code != TOKEN_ELSE {
-            n = self.token_expression();
-            if self.err != 0 {
-                return;
-            }
-        }
+        let Some(n) = self.parse_optional_expr(self.lastfile as i16) else { return };
         let mut m: i16 = 0;
         if lrun {
             let code = self.token_get().code;
@@ -1761,9 +1655,7 @@ impl Machine {
         }
 
         // LIST 領域クリア
-        for b in &mut self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST] {
-            *b = 0;
-        }
+        self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.listsize = 0;
         self.pc = PC_NULL;
         self.pcbreak = PC_NULL;
@@ -1953,37 +1845,44 @@ impl Machine {
     }
 
     fn command_beep(&mut self) {
-        let mut tone = 10i16;
-        let mut len = 3i16;
+        // 既定値は IchigoJam 標準の TONE=10, LEN=3。
         let code = self.token_get().code;
         self.token_back();
-        if code != TOKEN_NULL && code != TOKEN_ELSE {
-            tone = self.token_expression();
+        let (tone, len) = if code == TOKEN_NULL || code == TOKEN_ELSE {
+            (10i16, 3i16)
+        } else {
+            let tone = self.token_expression();
             if self.err != 0 {
                 return;
             }
-            let code = self.token_get().code;
-            if code != TOKEN_COMMA {
-                self.token_back();
-            } else {
-                len = self.token_expression();
+            let len = if self.token_get().code == TOKEN_COMMA {
+                let v = self.token_expression();
                 if self.err != 0 {
                     return;
                 }
-            }
-        }
+                v
+            } else {
+                self.token_back();
+                3
+            };
+            (tone, len)
+        };
         self.token_end();
         self.psg_beep(tone, len);
     }
 
     fn command_play(&mut self) {
-        let mut mml: Option<i32> = None;
         let code = self.token_get().code;
         self.token_back();
-        if code != TOKEN_NULL && code != TOKEN_ELSE {
+        let mml = if code == TOKEN_NULL || code == TOKEN_ELSE {
+            None
+        } else {
             let n = self.token_expression();
-            mml = Some(n as i32);
-        }
+            if self.err != 0 {
+                return;
+            }
+            Some(n as i32)
+        };
         self.psg_play_mml(mml);
         self.token_end();
     }
@@ -2028,6 +1927,62 @@ impl Machine {
             self.screen_pset(pos[0], pos[1], pos[2]);
         } else {
             self.screen_line(pos[0], pos[1], pos[2], pos[3], pos[4]);
+        }
+    }
+
+    /// PRINT DEC$(n[,m]) の本体。m<=0 のときは無装飾、m>0 のときは
+    /// 右寄せまたは下位 m 桁の切出し表示。
+    fn print_dec(&mut self, n2: i16, m: i16) {
+        if m <= 0 {
+            self.put_num(n2 as i32);
+            return;
+        }
+        let beam = Machine::beam(n2 as i32);
+        if (beam as i16) <= m {
+            for _ in 0..(m as u32 - beam) {
+                self.put_chr(b' ');
+            }
+            self.put_num(n2 as i32);
+            return;
+        }
+        // 桁数オーバー: 下位 m 桁のみ出力 (符号は捨てる)
+        let mut n2 = (n2 as i32).abs();
+        let mut beam = 5i32;
+        let mut d: u32 = 10000;
+        while d > 0 {
+            let c = (n2 as u32) / d;
+            if beam <= m as i32 {
+                self.put_chr(c as u8 + b'0');
+            }
+            n2 -= (c * d) as i32;
+            beam -= 1;
+            d /= 10;
+        }
+    }
+
+    /// PRINT HEX$/BIN$ の本体。`bits_per_digit` は 4 (HEX) または 1 (BIN)。
+    /// `m == 0` のときは最小桁数を算出してから出力。
+    fn print_radix(&mut self, value: u16, mut m: i16, bits_per_digit: u32) {
+        if m == 0 {
+            let mut n = value;
+            loop {
+                m += 1;
+                n >>= bits_per_digit;
+                if n == 0 {
+                    break;
+                }
+            }
+        }
+        for i in (0..m).rev() {
+            let shift = i as u32 * bits_per_digit;
+            let mask = (1u16 << bits_per_digit) - 1;
+            let digit = ((value >> shift) & mask) as u8;
+            let c = if digit >= 10 {
+                digit + b'A' - 10
+            } else {
+                digit + b'0'
+            };
+            self.put_chr(c);
         }
     }
 
