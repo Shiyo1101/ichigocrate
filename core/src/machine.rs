@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::errors::*;
+use crate::errors::message_for_code;
 use crate::font::CHAR_PATTERN_JP;
 use crate::ram::*;
 
@@ -248,21 +248,27 @@ impl Machine {
 
     /// 変数 var\[i\] を取得 (i は配列添字 0..102, 102..128 が A..Z)
     pub fn var_get(&self, i: usize) -> i16 {
-        let off = OFFSET_RAM_VAR + i * 2;
-        i16::from_le_bytes([self.ram[off], self.ram[off + 1]])
+        self.read_i16_le(OFFSET_RAM_VAR + i * 2)
     }
 
     pub fn var_set(&mut self, i: usize, v: i16) {
-        let off = OFFSET_RAM_VAR + i * 2;
+        self.write_i16_le(OFFSET_RAM_VAR + i * 2, v);
+    }
+
+    #[inline]
+    fn read_i16_le(&self, off: usize) -> i16 {
+        i16::from_le_bytes([self.ram[off], self.ram[off + 1]])
+    }
+
+    #[inline]
+    fn write_i16_le(&mut self, off: usize, v: i16) {
         let b = v.to_le_bytes();
         self.ram[off] = b[0];
         self.ram[off + 1] = b[1];
     }
 
     pub fn clear_vars(&mut self) {
-        for b in &mut self.ram[OFFSET_RAM_VAR..OFFSET_RAM_VAR + SIZE_RAM_VAR] {
-            *b = 0;
-        }
+        self.ram[OFFSET_RAM_VAR..OFFSET_RAM_VAR + SIZE_RAM_VAR].fill(0);
     }
 
     // ============================================================
@@ -270,15 +276,11 @@ impl Machine {
     // ============================================================
 
     pub fn list_get_number(&self, index: u16) -> i16 {
-        let off = OFFSET_RAM_LIST + index as usize;
-        i16::from_le_bytes([self.ram[off], self.ram[off + 1]])
+        self.read_i16_le(OFFSET_RAM_LIST + index as usize)
     }
 
     pub fn list_set_number(&mut self, index: u16, num: i16) {
-        let off = OFFSET_RAM_LIST + index as usize;
-        let b = num.to_le_bytes();
-        self.ram[off] = b[0];
-        self.ram[off + 1] = b[1];
+        self.write_i16_le(OFFSET_RAM_LIST + index as usize, num);
     }
 
     pub fn list_get_length(&self, index: u16) -> u8 {
@@ -314,6 +316,12 @@ impl Machine {
 
     pub fn list_set_pc(&mut self, n: u16) {
         self.pc = OFFSET_RAM_LIST + n as usize + 3;
+    }
+
+    /// 現在の PC が LIST 領域 (= プログラム本体) 内を指しているか。
+    #[inline]
+    pub fn pc_in_list(&self) -> bool {
+        (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&self.pc)
     }
 
     // ============================================================
@@ -352,9 +360,7 @@ impl Machine {
 
     pub fn basic_init(&mut self) {
         self.clear_vars();
-        for b in &mut self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST] {
-            *b = 0;
-        }
+        self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.pc = PC_NULL;
         self.pcbreak = PC_NULL;
         self.listsize = 0;
@@ -381,15 +387,15 @@ impl Machine {
         if self.cursory == -1 {
             self.cursory = 0;
         }
-        if (self.err as usize) < ERR_MESSAGES.len() {
-            let msg = ERR_MESSAGES[self.err as usize];
-            // メッセージは別途確保 (借用衝突回避)
+        let msg = message_for_code(self.err);
+        if !msg.is_empty() {
+            // 借用衝突回避のためコピーしてから書き出す
             let s = msg.to_string();
             self.put_str(&s);
         }
 
         // 実行中の行番号を表示
-        if self.pc >= OFFSET_RAM_LIST && self.pc < OFFSET_RAM_LIST + SIZE_RAM_LIST {
+        if self.pc_in_list() {
             let mut index: u16 = 0;
             loop {
                 let n = self.list_get_number(index);
@@ -459,6 +465,8 @@ impl Machine {
         len
     }
 
+    /// 10 進表示時の文字数 (符号 `-` を含む)。例: `beam(-42)` → 3。
+    /// PRINT DEC$ の桁数調整に使う。
     pub fn beam(n: i32) -> u32 {
         let mut res: u32 = 1;
         let mut n = n;
@@ -556,11 +564,7 @@ impl Machine {
 
 #[inline]
 pub fn basic_toupper(c: u8) -> u8 {
-    if c.is_ascii_lowercase() {
-        c & 0b1011111
-    } else {
-        c
-    }
+    c.to_ascii_uppercase()
 }
 
 /// C strlen8: NUL 終端文字列の長さ
