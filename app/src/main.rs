@@ -190,6 +190,8 @@ struct IchigoApp {
     next_tick_time: Instant,
     /// WAIT 終了予定時刻 (実時間ベース)
     wait_until: Option<Instant>,
+    /// 直前フレームのカナモード状態 (タイトル更新差分用)
+    last_kana: bool,
 }
 
 impl IchigoApp {
@@ -217,6 +219,7 @@ impl IchigoApp {
             start_time: now,
             next_tick_time: now,
             wait_until: None,
+            last_kana: false,
         }
     }
 }
@@ -331,6 +334,17 @@ impl App for IchigoApp {
         // ===== 音声共有更新 =====
         self.shared_tone
             .store(self.machine.current_tone_hz.to_bits(), Ordering::Relaxed);
+
+        // ===== カナモード インジケータ (ウィンドウタイトル) =====
+        if self.machine.key_kana != self.last_kana {
+            let title = if self.machine.key_kana {
+                "IchigoJam BASIC (Rust port) — KANA"
+            } else {
+                "IchigoJam BASIC (Rust port)"
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.to_string()));
+            self.last_kana = self.machine.key_kana;
+        }
 
         // ===== 描画 =====
         // カーソル点滅も実時間 (~333ms = 1/3 sec) ベース
@@ -505,13 +519,19 @@ fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
 
 fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
     ctx.input(|i| {
+        // F10: ローマ字 → 半角カナ変換のオン/オフ
+        // (本家 IchigoJam の Ctrl+Space は macOS では OS の入力ソース
+        // 切替に予約されているため、両 OS で動く F10 を採用)
+        if i.key_pressed(Key::F10) {
+            m.toggle_kana();
+        }
         // テキスト入力 (ASCII 文字)
         for ev in &i.events {
             if let egui::Event::Text(s) = ev {
                 for c in s.chars() {
                     if let Some(b) = char_to_basic(c) {
-                        // 直接 VRAM へ描画 (REPL 編集風)
-                        m.screen_putc(b);
+                        // カナモード中はローマ字 → 半角カナ変換を通す
+                        m.input_putc(b);
                     }
                 }
             }
@@ -532,7 +552,12 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         ];
         for (k, code) in mapping {
             if i.key_pressed(k) {
-                m.screen_putc(code);
+                // Backspace はカナ変換側の未確定バッファ管理も通したい
+                if k == Key::Backspace && m.key_kana {
+                    m.input_putc(code);
+                } else {
+                    m.screen_putc(code);
+                }
             }
         }
         // INKEY() 用キューにも積む

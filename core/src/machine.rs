@@ -71,6 +71,10 @@ pub struct Machine {
     pub key_insert: bool,
     pub key_bkinsert: bool,
     pub key_kana: bool,
+    /// ローマ字かな変換の未確定バッファ (1 文字目)
+    pub key_kana_buf_0: u8,
+    /// ローマ字かな変換の未確定バッファ (2 文字目)
+    pub key_kana_buf_1: u8,
     pub key_flg_esc: i8,
     /// 押下キーバッファ (REPL/INPUT/INKEY 用)
     pub keybuf: VecDeque<u8>,
@@ -169,6 +173,8 @@ impl Machine {
             key_insert: true,
             key_bkinsert: true,
             key_kana: false,
+            key_kana_buf_0: 0,
+            key_kana_buf_1: 0,
             key_flg_esc: 0,
             keybuf: VecDeque::with_capacity(128),
             errorignore: false,
@@ -511,6 +517,35 @@ impl Machine {
     pub fn key_push(&mut self, c: u8) {
         if self.keybuf.len() < 126 {
             self.keybuf.push_back(c);
+        }
+    }
+
+    // ============================================================
+    // ローマ字かな入力
+    // ============================================================
+
+    /// カナモードを反転し、未確定バッファをクリアする。
+    pub fn toggle_kana(&mut self) {
+        self.key_kana = !self.key_kana;
+        self.key_kana_buf_0 = 0;
+        self.key_kana_buf_1 = 0;
+    }
+
+    /// テキスト入力 1 文字を画面へ反映する。
+    /// カナモード ON の時はローマ字 → 半角カナへ変換し、BS による
+    /// 直前文字の書き換えも含めて `screen_putc` へ流す。
+    pub fn input_putc(&mut self, c: u8) {
+        if !self.key_kana {
+            self.screen_putc(c);
+            return;
+        }
+        let mut buf0 = self.key_kana_buf_0;
+        let mut buf1 = self.key_kana_buf_1;
+        let bytes = crate::romajikana::romajikana_input(&mut buf0, &mut buf1, c);
+        self.key_kana_buf_0 = buf0;
+        self.key_kana_buf_1 = buf1;
+        for b in bytes {
+            self.screen_putc(b);
         }
     }
 }

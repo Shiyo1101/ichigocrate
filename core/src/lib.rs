@@ -2,7 +2,7 @@
 //!
 //! - 言語: 日本語フォント版 (LANG_JP)
 //! - バージョン: 1.4.3 ベース
-//! - 非対応: IoT 拡張、Morse 拡張、ローマ字かな変換、多言語フォント、FLASH 保存
+//! - 非対応: IoT 拡張、Morse 拡張、多言語フォント、FLASH 保存
 
 pub mod basic;
 pub mod errors;
@@ -10,6 +10,7 @@ pub mod font;
 pub mod machine;
 pub mod psg;
 pub mod ram;
+pub mod romajikana;
 pub mod screen;
 pub mod tokens;
 
