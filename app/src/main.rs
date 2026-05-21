@@ -21,7 +21,7 @@ use egui::{Color32, ColorImage, Key, TextureHandle, TextureOptions, Vec2};
 use ichigojam_core::{
     exec_line,
     machine::{BasicResult, Storage, PC_NULL},
-    Machine, OFFSET_RAM_VRAM, SCREEN_H, SCREEN_W, SIZE_RAM_VRAM,
+    LineOutcome, Machine, OFFSET_RAM_VRAM, SCREEN_H, SCREEN_W, SIZE_RAM_VRAM,
 };
 
 const PIXEL_SCALE: usize = 3;
@@ -126,6 +126,7 @@ fn filter_macos_stderr() {}
 // ============================================================
 
 /// `~/.ichigojam-rs/` 以下にスロット番号ごとのバイナリファイルを置く。
+#[derive(Debug)]
 struct DiskStorage {
     dir: PathBuf,
     slot_count: u8,
@@ -152,22 +153,16 @@ impl Storage for DiskStorage {
         std::fs::write(self.path(slot), data).is_ok()
     }
 
-    fn load(&mut self, slot: u8, buf: &mut [u8]) -> i32 {
-        match std::fs::read(self.path(slot)) {
-            Ok(bytes) => {
-                let n = bytes.len().min(buf.len());
-                buf[..n].copy_from_slice(&bytes[..n]);
-                // 残りはゼロ埋め (リストの終端を保証)
-                for b in &mut buf[n..] {
-                    *b = 0;
-                }
-                n as i32
-            }
-            Err(_) => -1,
-        }
+    fn load(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
+        let bytes = std::fs::read(self.path(slot)).ok()?;
+        let n = bytes.len().min(buf.len());
+        buf[..n].copy_from_slice(&bytes[..n]);
+        // 残りはゼロ埋め (リストの終端を保証)
+        buf[n..].fill(0);
+        Some(n)
     }
 
-    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> i32 {
+    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
         self.load(slot, buf)
     }
 
@@ -432,9 +427,8 @@ impl IchigoApp {
         }
         // line buffer にコピーして実行
         self.machine.key_flg_esc = 0;
-        let res = exec_line(&mut self.machine, &line);
-        match res {
-            BasicResult::Execute => {
+        match exec_line(&mut self.machine, &line) {
+            Ok(LineOutcome::Executed) => {
                 if self.machine.pc != PC_NULL {
                     // RUN 後など継続実行が必要
                     self.running = true;
@@ -442,11 +436,12 @@ impl IchigoApp {
                     self.machine.put_str("OK\n");
                 }
             }
-            BasicResult::Edit => {
+            Ok(LineOutcome::Edited) => {
                 // 行編集 (LIST 追加・削除) は OK を表示しない (IchigoJam 慣習)
             }
-            BasicResult::StopOrErr => {
-                // エラーは command_error 内で表示済
+            Err(_err) => {
+                // エラーメッセージは BASIC インタプリタ内で VRAM に
+                // 書き済 (command_error → basic_print_error)。
             }
         }
     }
@@ -585,7 +580,7 @@ fn char_to_basic(c: char) -> Option<u8> {
     }
     let mut b = c as u8;
     // IchigoJam 慣習: 英字は常に大文字 (CAPS デフォルト ON)
-    if (b'a'..=b'z').contains(&b) {
+    if b.is_ascii_lowercase() {
         b -= b'a' - b'A';
     }
     Some(b)
