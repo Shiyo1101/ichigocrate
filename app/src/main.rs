@@ -30,6 +30,33 @@ const FONT_H: usize = 8;
 const IMG_W: usize = SCREEN_W * FONT_W;
 const IMG_H: usize = SCREEN_H * FONT_H;
 
+/// IchigoJam 標準準拠の F キー割当て。3 番目の bool は「Enter まで自動投入するか」。
+const FKEY_BINDINGS: &[(Key, &str, bool)] = &[
+    (Key::F1, "CLS", true),
+    (Key::F2, "LOAD", false),
+    (Key::F3, "SAVE", false),
+    (Key::F4, "LIST", true),
+    (Key::F5, "RUN", true),
+    (Key::F6, "?FREE()", true),
+    (Key::F7, "?VER()", true),
+    (Key::F8, "FILES", true),
+];
+
+/// egui の `Key` から REPL/エディタが扱う制御コードへのマップ。
+const KEY_CONTROL_MAP: &[(Key, u8)] = &[
+    (Key::Backspace, 0x08),
+    (Key::Delete, 0x7f),
+    (Key::ArrowLeft, 28),
+    (Key::ArrowRight, 29),
+    (Key::ArrowUp, 30),
+    (Key::ArrowDown, 31),
+    (Key::Tab, b'\t'),
+    (Key::Home, 0x12),
+    (Key::End, 0x17),
+    (Key::PageUp, 0x13),
+    (Key::PageDown, 0x14),
+];
+
 fn main() -> eframe::Result<()> {
     // macOS の Input Method Kit が出す
     // "error messaging the mach port for IMKCFRunLoopWakeUpReliable"
@@ -248,29 +275,14 @@ impl App for IchigoApp {
         }
 
         // ファンクションキー: IchigoJam 標準ショートカット
-        // F1=CLS, F2=LOAD, F3=SAVE, F4=LIST, F5=RUN, F6=?FREE(), F7=?VER(), F8=FILES
-        // (run=true は入力後 ENTER 相当、false は文字挿入のみ → ユーザがスロット番号等を続けて入力する)
+        // run=true は ENTER まで自動投入、false は文字挿入のみ
+        // (ユーザが続けてスロット番号等を入力できるよう待機)
         if !self.running {
             let fkey = ctx.input(|i| {
-                if i.key_pressed(Key::F1) {
-                    Some(("CLS", true))
-                } else if i.key_pressed(Key::F2) {
-                    Some(("LOAD", false))
-                } else if i.key_pressed(Key::F3) {
-                    Some(("SAVE", false))
-                } else if i.key_pressed(Key::F4) {
-                    Some(("LIST", true))
-                } else if i.key_pressed(Key::F5) {
-                    Some(("RUN", true))
-                } else if i.key_pressed(Key::F6) {
-                    Some(("?FREE()", true))
-                } else if i.key_pressed(Key::F7) {
-                    Some(("?VER()", true))
-                } else if i.key_pressed(Key::F8) {
-                    Some(("FILES", true))
-                } else {
-                    None
-                }
+                FKEY_BINDINGS
+                    .iter()
+                    .find(|(k, _, _)| i.key_pressed(*k))
+                    .map(|(_, cmd, run)| (*cmd, *run))
             });
             if let Some((cmd, run)) = fkey {
                 self.type_fkey_command(cmd, run);
@@ -532,20 +544,7 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
             }
         }
         // 矢印キー、Backspace、Delete などの特殊キー
-        let mapping = [
-            (Key::Backspace, 0x08),
-            (Key::Delete, 0x7f),
-            (Key::ArrowLeft, 28),
-            (Key::ArrowRight, 29),
-            (Key::ArrowUp, 30),
-            (Key::ArrowDown, 31),
-            (Key::Tab, b'\t'),
-            (Key::Home, 0x12),
-            (Key::End, 0x17),
-            (Key::PageUp, 0x13),
-            (Key::PageDown, 0x14),
-        ];
-        for (k, code) in mapping {
+        for &(k, code) in KEY_CONTROL_MAP {
             if i.key_pressed(k) {
                 // Backspace はカナ変換側の未確定バッファ管理も通したい
                 if k == Key::Backspace && m.key_kana {
