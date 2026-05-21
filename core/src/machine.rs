@@ -29,83 +29,37 @@ pub struct Token {
     pub value: i16,
 }
 
-/// IchigoJam BASIC 仮想マシン
+/// IchigoJam BASIC 仮想マシン。
+///
+/// 公開フィールドはホスト (UI / テスト) が直接参照する必要のあるものだけ。
+/// それ以外はクレート内専用 (`pub(crate)`) で、外部からはアクセサ経由で
+/// 触る。元 C 実装の `_g` 構造体を素朴に移植した名残で getter を介さず
+/// 直アクセスしているフィールドが多いため、内部用にはまだ全部 `pub(crate)`
+/// で公開している。
+#[derive(Debug)]
 pub struct Machine {
     /// 統合 RAM (PCG/VAR/VRAM/LIST/KEYBUF/LINEBUF/I2CBUF)
     pub ram: Vec<u8>,
     /// プログラムカウンタ (ram のインデックス)。PC_NULL なら未走行。
     pub pc: usize,
-    /// 直前のトークン取得開始位置 (token_back 用)
-    pub lasttoken: usize,
-    /// 直前のトークン取得後の位置
-    pub lasttokenpc: usize,
-    /// 直前のトークン
-    pub bklasttoken: Token,
-    /// ブレーク時に保持される pc
-    pub pcbreak: usize,
-    /// エラー番号 (0 なら無エラー)
-    pub err: u8,
-    /// GOSUB スタックの段数
-    pub ngosubstack: u8,
-    /// FOR スタックの段数
-    pub nforstack: u8,
-    pub gosubstack: [usize; IJB_SIZEOF_GOSUB_STACK],
-    pub forstack: [usize; IJB_SIZEOF_FOR_STACK],
-    /// トークンモード (0:コマンド 1:式)
-    pub tokenmode: u8,
     /// LIST の使用バイト数 (末尾 0x00 0x00 を除く)
     pub listsize: u16,
 
-    // ===== スクリーン状態 =====
+    // ===== スクリーン状態 (ホストが描画時に読む) =====
     pub cursorx: i32,
     pub cursory: i32,
-    pub screenw: usize,
-    pub screenh: usize,
     pub cursorflg: bool,
-    pub screen_insertmode: bool,
-    pub screen_locatemode: u8,
     pub screen_invert: bool,
-    pub screen_big: u8,
 
-    // ===== キーボード関連 =====
-    pub key_insert: bool,
-    pub key_bkinsert: bool,
+    // ===== キーボード関連 (ホストが書く) =====
     pub key_kana: bool,
-    /// ローマ字かな変換の未確定バッファ (1 文字目)
-    pub key_kana_buf_0: u8,
-    /// ローマ字かな変換の未確定バッファ (2 文字目)
-    pub key_kana_buf_1: u8,
     pub key_flg_esc: i8,
-    /// 押下キーバッファ (REPL/INPUT/INKEY 用)
-    pub keybuf: VecDeque<u8>,
-    pub errorignore: bool,
-    pub noresmode: bool,
 
-    // ===== PSG (音源) =====
-    pub psgoct: u8,
-    pub psgdeflen: u8,
-    pub psg_sounder: u8,
-    pub psgratio: u8,
-    pub psgwaitcnt: u16,
-    pub psgtone: u16,
-    pub psgtempo: u16,
-    pub psglen: u32,
-    /// MML 文字列の RAM インデックス (None = 演奏終了)
-    pub psgmml: Option<usize>,
-    pub psgrep: Option<usize>,
-
-    // ===== タイマ / 乱数 =====
+    // ===== タイマ (ホストが 60Hz で更新) =====
     pub frames: u16,
-    pub linecnt: u16,
-    pub rndn: [u32; 4],
 
-    // ===== I/O 状態 =====
+    // ===== I/O 状態 (ホストが LED 枠線色決定で読む) =====
     pub led: bool,
-    pub sleepflg: u8,
-    pub fileslot: u8,
-    pub lastfile: u8,
-    pub uartmode_txd: u8,
-    pub uartmode_rxd: u8,
 
     // ===== サウンド出力 (UI/Audio スレッド連携) =====
     /// 現在の周波数 (Hz)。0 なら無音。
@@ -115,22 +69,76 @@ pub struct Machine {
     /// 残り待機フレーム数。0 でなければ basic_step は即 return する。
     pub wait_frames: u32,
 
-    // ===== ストレージ (SAVE/LOAD/FILES) =====
+    // ============================================================
+    // ↓ 以下はクレート内専用フィールド
+    // ============================================================
+
+    /// 直前のトークン取得開始位置 (token_back 用)
+    pub(crate) lasttoken: usize,
+    /// 直前のトークン取得後の位置
+    pub(crate) lasttokenpc: usize,
+    /// 直前のトークン
+    pub(crate) bklasttoken: Token,
+    /// ブレーク時に保持される pc
+    pub(crate) pcbreak: usize,
+    /// エラー番号 (0 なら無エラー)
+    pub(crate) err: u8,
+    /// GOSUB スタックの段数
+    pub(crate) ngosubstack: u8,
+    /// FOR スタックの段数
+    pub(crate) nforstack: u8,
+    pub(crate) gosubstack: [usize; IJB_SIZEOF_GOSUB_STACK],
+    pub(crate) forstack: [usize; IJB_SIZEOF_FOR_STACK],
+    /// トークンモード (0:コマンド 1:式)
+    pub(crate) tokenmode: u8,
+
+    pub(crate) screenw: usize,
+    pub(crate) screenh: usize,
+    pub(crate) screen_insertmode: bool,
+    pub(crate) screen_locatemode: u8,
+
+    pub(crate) key_insert: bool,
+    /// ローマ字かな変換の未確定バッファ (1 文字目)
+    pub(crate) key_kana_buf_0: u8,
+    /// ローマ字かな変換の未確定バッファ (2 文字目)
+    pub(crate) key_kana_buf_1: u8,
+    /// 押下キーバッファ (REPL/INPUT/INKEY 用)
+    pub(crate) keybuf: VecDeque<u8>,
+    pub(crate) errorignore: bool,
+    pub(crate) noresmode: bool,
+
+    pub(crate) psgoct: u8,
+    pub(crate) psgdeflen: u8,
+    pub(crate) psgratio: u8,
+    pub(crate) psgwaitcnt: u16,
+    pub(crate) psgtone: u16,
+    pub(crate) psgtempo: u16,
+    pub(crate) psglen: u32,
+    /// MML 文字列の RAM インデックス (None = 演奏終了)
+    pub(crate) psgmml: Option<usize>,
+    pub(crate) psgrep: Option<usize>,
+
+    pub(crate) linecnt: u16,
+    pub(crate) rndn: [u32; 4],
+
+    /// 最後に SAVE/LOAD した slot 番号 (FILE() で参照)
+    pub(crate) lastfile: u8,
+
     /// ホスト側ストレージ (デスクトップではディスク)。None なら File error。
-    pub storage: Option<Box<dyn Storage>>,
+    pub(crate) storage: Option<Box<dyn Storage>>,
 }
 
 /// SAVE/LOAD/FILES のホスト側実装。デスクトップアプリは実ファイル、
 /// テスト/組込はメモリ実装を差し込む。
-pub trait Storage {
-    /// 指定スロットへ data 全体を保存。成功なら true。
+pub trait Storage: std::fmt::Debug {
+    /// 指定スロットへ data 全体を保存。成功なら `true`。
     fn save(&mut self, slot: u8, data: &[u8]) -> bool;
-    /// 指定スロットから最大 buf.len() バイトを読み出し、読込バイト数を返す。
-    /// スロットが空・読込エラーなら -1。
-    fn load(&mut self, slot: u8, buf: &mut [u8]) -> i32;
-    /// FILES 用: スロットの先頭バイト (LIST 形式) を覗き見る。
-    /// 戻り値は読込バイト数 (`load` と同じ意味)。
-    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> i32;
+    /// 指定スロットから最大 `buf.len()` バイトを読み出す。
+    /// 読込んだバイト数 (`Some`) または失敗 (`None`) を返す。
+    /// `None` の場合の `buf` の中身は不定。
+    fn load(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize>;
+    /// FILES 用: スロット先頭バイトの覗き見。意味は [`Storage::load`] と同じ。
+    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize>;
     /// 利用可能なスロット数 (FILES デフォルト範囲)。
     fn slot_count(&self) -> u8 {
         16
@@ -168,10 +176,8 @@ impl Machine {
             screen_insertmode: true,
             screen_locatemode: 0,
             screen_invert: false,
-            screen_big: 0,
 
             key_insert: true,
-            key_bkinsert: true,
             key_kana: false,
             key_kana_buf_0: 0,
             key_kana_buf_1: 0,
@@ -182,7 +188,6 @@ impl Machine {
 
             psgoct: 3,
             psgdeflen: 8,
-            psg_sounder: 0,
             psgratio: 1,
             psgwaitcnt: 0,
             psgtone: 0,
@@ -196,11 +201,7 @@ impl Machine {
             rndn: [123456789, 362436069, 521288629, 88675123],
 
             led: false,
-            sleepflg: 0,
-            fileslot: 0,
             lastfile: 0,
-            uartmode_txd: 0,
-            uartmode_rxd: 0,
 
             current_tone_hz: 0.0,
             wait_frames: 0,
@@ -320,7 +321,6 @@ impl Machine {
     // ============================================================
 
     pub fn peek(&self, ad: i32) -> u8 {
-        let ad = ad;
         if ad < 0 {
             return 0;
         }
@@ -541,10 +541,10 @@ impl Machine {
         }
         let mut buf0 = self.key_kana_buf_0;
         let mut buf1 = self.key_kana_buf_1;
-        let bytes = crate::romajikana::romajikana_input(&mut buf0, &mut buf1, c);
+        let out = crate::romajikana::romajikana_input(&mut buf0, &mut buf1, c);
         self.key_kana_buf_0 = buf0;
         self.key_kana_buf_1 = buf1;
-        for b in bytes {
+        for b in &out {
             self.screen_putc(b);
         }
     }
@@ -556,7 +556,7 @@ impl Machine {
 
 #[inline]
 pub fn basic_toupper(c: u8) -> u8 {
-    if (b'a'..=b'z').contains(&c) {
+    if c.is_ascii_lowercase() {
         c & 0b1011111
     } else {
         c
