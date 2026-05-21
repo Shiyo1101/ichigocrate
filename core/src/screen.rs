@@ -215,11 +215,11 @@ impl Machine {
             }
             29 => {
                 // RIGHT
-                if self.cursorx != w as i32 - 1 || self.cursory != h as i32 - 1 {
-                    if self.vram()
+                if (self.cursorx != w as i32 - 1 || self.cursory != h as i32 - 1)
+                    && (self.vram()
                         [self.cursory as usize * w + self.cursorx as usize]
                         != 0
-                        || self.screen_insertmode
+                        || self.screen_insertmode)
                     {
                         self.cursorx += 1;
                         if self.cursorx == w as i32 {
@@ -227,7 +227,6 @@ impl Machine {
                             self.cursory += 1;
                         }
                     }
-                }
             }
             30 => {
                 // UP
@@ -355,12 +354,12 @@ impl Machine {
         let mut p = self.vram_mut()[idx];
         let n = (x & 1) as u32 + ((y & 1) as u32) * 2;
         if cmd == 3 {
-            if (p < 128 || p >= 128 + 16) && p != 0 {
+            if !(128..128 + 16).contains(&p) && p != 0 {
                 p = 128 + 15;
             }
             return ((p as u32) & (1u32 << n)) >> n;
         }
-        if p < 128 || p >= 128 + 16 {
+        if !(128..128 + 16).contains(&p) {
             p = 128;
         }
         match cmd {
