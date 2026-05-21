@@ -344,6 +344,15 @@ impl App for IchigoApp {
             self.texture = Some(ctx.load_texture("vram", img, opts));
         }
 
+        // ===== LED 表示 (デスクトップでは画面枠線の色で代用) =====
+        // 実機 IchigoJam の LED コマンドの代わりに、画面 (VRAM) を
+        // 囲む枠線を LED 1 で赤、LED 0 で消灯 (透明) にする。
+        let border_color = if self.machine.led {
+            Color32::from_rgb(230, 40, 40)
+        } else {
+            Color32::TRANSPARENT
+        };
+
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(Color32::BLACK))
             .show(ctx, |ui| {
@@ -353,7 +362,22 @@ impl App for IchigoApp {
                         (IMG_H * PIXEL_SCALE) as f32,
                     );
                     ui.centered_and_justified(|ui| {
-                        ui.image((tex.id(), size));
+                        let (rect, _) =
+                            ui.allocate_exact_size(size, egui::Sense::hover());
+                        ui.painter().image(
+                            tex.id(),
+                            rect,
+                            egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            ),
+                            Color32::WHITE,
+                        );
+                        ui.painter().rect_stroke(
+                            rect.expand(8.0),
+                            0.0,
+                            egui::Stroke::new(8.0, border_color),
+                        );
                     });
                 }
             });
