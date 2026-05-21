@@ -136,8 +136,7 @@ impl Machine {
     /// 呼び出してプログラムを進める。
     pub fn basic_execute(&mut self, commandline_pc: usize) -> BasicResult {
         self.basic_start(commandline_pc);
-        let started_in_list = commandline_pc >= OFFSET_RAM_LIST
-            && commandline_pc < OFFSET_RAM_LIST + SIZE_RAM_LIST;
+        let started_in_list = (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&commandline_pc);
         loop {
             if let Some(r) = self.basic_step() {
                 return r;
@@ -357,7 +356,7 @@ impl Machine {
             }
             if let Some(i) = matched {
                 tok.code = i as u16 + N_TOKEN_OFFSET;
-            } else if (b'A'..=b'Z').contains(&c) {
+            } else if c.is_ascii_uppercase() {
                 self.pc += 1;
                 tok.code = TOKEN_VAR;
                 tok.value = (c - b'A' + IJB_SIZEOF_ARRAY as u8) as i16;
@@ -721,7 +720,7 @@ impl Machine {
                 } else {
                     self.pcbreak
                 };
-                if pc2 >= OFFSET_RAM_LIST && pc2 < OFFSET_RAM_LIST + SIZE_RAM_LIST {
+                if (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&pc2) {
                     let mut index: u16 = 0;
                     loop {
                         let n = self.list_get_number(index);
@@ -760,12 +759,9 @@ impl Machine {
                 sin360(v as i32) as i16
             }
             TOKEN_IN => {
-                let v = self.token_opt1();
-                if v == 0 {
-                    0
-                } else {
-                    0
-                }
+                // IN(n) は実機 GPIO 入力。デスクトップ移植では未対応のため 0 固定
+                let _ = self.token_opt1();
+                0
             }
             TOKEN_VPEEK | TOKEN_SCR | TOKEN_POINT => {
                 let type_ = t.code;
@@ -823,7 +819,7 @@ impl Machine {
             TOKEN_STRING => {
                 // RAM インデックス p を仮想アドレスに変換 (p + OFFSET_RAMROM)
                 let p = self.token_skipstr();
-                (p as i32 + OFFSET_RAMROM as i32 - 0) as i16
+                (p as i32 + OFFSET_RAMROM as i32) as i16
             }
             TOKEN_AT => {
                 // ラベル探索
@@ -1246,7 +1242,7 @@ impl Machine {
                     }
                 }
                 TOKEN_HEX => {
-                    let n2 = (self.token_expression() as u16) & 0xffff;
+                    let n2 = self.token_expression() as u16;
                     if self.err != 0 {
                         return;
                     }
@@ -1286,7 +1282,7 @@ impl Machine {
                     }
                 }
                 TOKEN_BIN => {
-                    let n2 = (self.token_expression() as u16) & 0xffff;
+                    let n2 = self.token_expression() as u16;
                     if self.err != 0 {
                         return;
                     }
@@ -1775,16 +1771,14 @@ impl Machine {
         // 読み込み
         let max = SIZE_RAM_LIST - 2;
         let mut buf = vec![0u8; max];
-        let read = if let Some(s) = self.storage.as_mut() {
-            s.load(n as u8, &mut buf)
-        } else {
-            -1
-        };
-        if read < 0 {
+        let read = self
+            .storage
+            .as_mut()
+            .and_then(|s| s.load(n as u8, &mut buf));
+        let Some(read) = read else {
             self.command_error(ERR_FILE_ERROR);
             return;
-        }
-        let read = read as usize;
+        };
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + read].copy_from_slice(&buf[..read]);
 
         // listsize を行を辿って算出
@@ -1872,13 +1866,12 @@ impl Machine {
             if i < 0 {
                 continue;
             }
-            let res = if let Some(s) = self.storage.as_mut() {
-                s.peek(i as u8, &mut buf)
-            } else {
-                -1
-            };
+            let res = self
+                .storage
+                .as_mut()
+                .and_then(|s| s.peek(i as u8, &mut buf));
             let b = self.put_num(i as i32);
-            if res >= PEEK_LEN as i32 {
+            if res.is_some_and(|n| n >= PEEK_LEN) {
                 let line_num = i16::from_le_bytes([buf[0], buf[1]]);
                 if line_num > 0 {
                     self.put_chr(b' ');
