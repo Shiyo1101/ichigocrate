@@ -15,7 +15,7 @@ pub const PSG_DEFAULT_TEMPO: u16 = 120;
 
 #[inline]
 fn psg_toupper(c: u8) -> u8 {
-    if (b'a'..=b'z').contains(&c) {
+    if c.is_ascii_lowercase() {
         c & 0b1011111
     } else {
         c
