@@ -4,7 +4,7 @@
 //! 用途のため `current_tone_hz` を周波数 (Hz) で公開し、音声バックエンド側
 //! が矩形波を生成する。
 
-use crate::machine::Machine;
+use crate::machine::{basic_toupper, Machine};
 use crate::ram::OFFSET_RAMROM;
 
 pub const PSG_TICK_FREQ: u32 = 60; // 毎フレーム1回
@@ -12,15 +12,6 @@ pub const PSG_TICK_PER_SEC: u32 = 60;
 pub const PSG_DEFAULT_OCT: u8 = 3;
 pub const PSG_DEFAULT_LEN: u8 = 8;
 pub const PSG_DEFAULT_TEMPO: u16 = 120;
-
-#[inline]
-fn psg_toupper(c: u8) -> u8 {
-    if c.is_ascii_lowercase() {
-        c & 0b1011111
-    } else {
-        c
-    }
-}
 
 /// MML の音階インデックス t (0=O1C, 1=O1C#, ...) を Hz に変換する。
 /// O3C を C4 (261.63 Hz) に揃える。
@@ -95,7 +86,7 @@ impl Machine {
         loop {
             let mut t: i32 = -2;
             let mut s: i32 = 0;
-            let c = psg_toupper(self.mml_next());
+            let c = basic_toupper(self.mml_next());
             match c {
                 b'<' => {
                     self.psgoct = self.psgoct.wrapping_add(1);
