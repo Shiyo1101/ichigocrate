@@ -81,6 +81,7 @@ fn wait_and_goto_loop_yields() {
 #[test]
 fn save_load_roundtrip() {
     use ichigojam_core::machine::Storage;
+    #[derive(Debug)]
     struct MemStore { data: Vec<u8>, has: bool }
     impl Storage for MemStore {
         fn save(&mut self, _slot: u8, d: &[u8]) -> bool {
@@ -88,14 +89,14 @@ fn save_load_roundtrip() {
             self.has = true;
             true
         }
-        fn load(&mut self, _slot: u8, buf: &mut [u8]) -> i32 {
-            if !self.has { return -1; }
+        fn load(&mut self, _slot: u8, buf: &mut [u8]) -> Option<usize> {
+            if !self.has { return None; }
             let n = self.data.len().min(buf.len());
             buf[..n].copy_from_slice(&self.data[..n]);
-            for b in &mut buf[n..] { *b = 0; }
-            n as i32
+            buf[n..].fill(0);
+            Some(n)
         }
-        fn peek(&mut self, slot: u8, buf: &mut [u8]) -> i32 {
+        fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
             self.load(slot, buf)
         }
     }
