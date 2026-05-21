@@ -14,18 +14,29 @@ pub mod romajikana;
 pub mod screen;
 pub mod tokens;
 
+pub use errors::BasicError;
 pub use machine::{BasicResult, Machine, Token, PC_NULL};
 pub use ram::{
     N_LINEBUF, OFFSET_RAMROM, OFFSET_RAM_LINEBUF, OFFSET_RAM_LIST, OFFSET_RAM_VRAM, SCREEN_H,
     SCREEN_W, SIZE_RAM, SIZE_RAM_LINEBUF, SIZE_RAM_VRAM,
 };
 
+/// `exec_line` の成功時の結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineOutcome {
+    /// 1 行を実行完了。REPL は次に `OK` を表示すべき。
+    Executed,
+    /// 行編集 (LIST に対する追加・削除)。`OK` は表示しない。
+    Edited,
+}
+
 /// REPL: 入力された 1 行を実行する。
 ///
 /// `line` は ASCII 文字列。RAM_LINEBUF にコピーした上で `basic_execute`
-/// を呼び出す。RUN や GOTO 等で実行が LIST 領域に移った場合は呼出元へ
-/// 即返るので、必要なら `run_to_completion` で続きを駆動する。
-pub fn exec_line(machine: &mut Machine, line: &str) -> BasicResult {
+/// を呼び出す。RUN や GOTO 等で実行が LIST 領域に移った場合は
+/// `Ok(LineOutcome::Executed)` で即返るので、必要なら毎フレーム
+/// [`Machine::basic_step`] を呼び続ける。
+pub fn exec_line(machine: &mut Machine, line: &str) -> Result<LineOutcome, BasicError> {
     let bytes = line.as_bytes();
     let max = N_LINEBUF.saturating_sub(1);
     let n = bytes.len().min(max);
@@ -33,7 +44,16 @@ pub fn exec_line(machine: &mut Machine, line: &str) -> BasicResult {
         machine.ram[OFFSET_RAM_LINEBUF + i] = b;
     }
     machine.ram[OFFSET_RAM_LINEBUF + n] = 0;
-    machine.basic_execute(OFFSET_RAM_LINEBUF)
+    match machine.basic_execute(OFFSET_RAM_LINEBUF) {
+        BasicResult::Execute => Ok(LineOutcome::Executed),
+        BasicResult::Edit => Ok(LineOutcome::Edited),
+        BasicResult::StopOrErr => match BasicError::from_code(machine.err) {
+            Some(err) => Err(err),
+            // err == 0 だが StopOrErr が返るケースは現状ない想定。
+            // 念のため Break として扱う (ESC のみ key_flg_esc 経由)。
+            None => Err(BasicError::Break),
+        },
+    }
 }
 
 /// テスト/ヘッドレス用: プログラム実行を同期的に最後まで進める。
