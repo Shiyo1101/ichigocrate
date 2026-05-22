@@ -538,21 +538,26 @@ impl Machine {
     ///   (bit0:← bit1:→ bit2:↑ bit3:↓ bit4:スペース bit5:X)。
     /// - `n > 0`: ASCII コード `n` のキーが押下中なら 1、そうでなければ 0。
     pub(crate) fn btn(&self, n: i16) -> i16 {
+        use crate::keycodes as kc;
         if n == 0 {
             0
         } else if n < 0 {
-            let bit = |code: usize, shift: u8| -> i16 {
-                if self.keys_down[code] {
-                    1 << shift
-                } else {
-                    0
-                }
-            };
-            bit(28, 0) | bit(29, 1) | bit(30, 2) | bit(31, 3) | bit(32, 4) | bit(88, 5)
+            let bit = |code: u8, shift: u8| -> i16 { i16::from(self.is_key_down(code)) << shift };
+            bit(kc::CURSOR_LEFT, 0)
+                | bit(kc::CURSOR_RIGHT, 1)
+                | bit(kc::CURSOR_UP, 2)
+                | bit(kc::CURSOR_DOWN, 3)
+                | bit(kc::SPACE, 4)
+                | bit(kc::KEY_X, 5)
         } else {
-            let code = n as usize;
-            i16::from(code < self.keys_down.len() && self.keys_down[code])
+            // n は ASCII コード。256 以上は対応キーが無いので 0。
+            i16::from(u8::try_from(n).is_ok_and(|code| self.is_key_down(code)))
         }
+    }
+
+    /// ASCII コード `code` のキーが現在押下されているか。
+    fn is_key_down(&self, code: u8) -> bool {
+        self.keys_down[code as usize]
     }
 
     // ---- ローマ字かな入力 ----
@@ -571,6 +576,14 @@ impl Machine {
     /// 上書きへ固定するので、ホストは実行中はこれを呼ばないこと。
     pub fn sync_insert_mode(&mut self) {
         self.screen_insertmode = self.key_insert;
+    }
+
+    /// カーソル描画幅。上書きモードは文字全体 (8px) を反転、挿入モードは
+    /// 左半分 (4px) のみ反転する (元 C のカーソル描画
+    /// `char_line ^= key_flg.insert ? 0xff : 0xf0` に対応)。
+    /// true で全幅、false で左半分。
+    pub fn cursor_full_width(&self) -> bool {
+        self.screen_insertmode
     }
 
     /// プログラムを継続実行中か。対話編集 (入力・カーソル移動) を行わない

@@ -1,29 +1,15 @@
 //! screen.h を Rust に移植。VRAM 文字操作およびピクセル描画。
 
 use crate::font::CHAR_PATTERN_JP;
+use crate::keycodes::{
+    BACKSPACE, CURSOR_DOWN, CURSOR_LEFT, CURSOR_RIGHT, CURSOR_UP, DELETE, FORM_FEED,
+    INSERT_TOGGLE, KANA_TOGGLE, LINE_SPLIT, LOCATE_PREFIX,
+};
 use crate::machine::{calc_div, Machine};
 use crate::ram::*;
 
-// ---- IchigoJam 標準の制御コード (元 C は数値リテラル直書きだったもの) ----
-
-/// FF: カーソル以降を消去
-const CC_FORM_FEED: u8 = 12;
-/// カナモードのトグル
-const CC_KANA_TOGGLE: u8 = 15;
-/// 挿入モードのトグル
-const CC_INSERT_TOGGLE: u8 = 17;
-/// 行分割 (簡略化のため改行扱い)
-const CC_LINE_SPLIT: u8 = 0x10;
-/// LOCATE モードに入る (続く 2 文字を座標として解釈)
-const CC_LOCATE_PREFIX: u8 = 21;
-const CC_BACKSPACE: u8 = 0x08;
-const CC_DELETE: u8 = 0x7f;
-const CC_CURSOR_LEFT: u8 = 28;
-const CC_CURSOR_RIGHT: u8 = 29;
-const CC_CURSOR_UP: u8 = 30;
-const CC_CURSOR_DOWN: u8 = 31;
-
-// screen_scroll の方向 (LOCATE/SCROLL 経由で渡される数値)
+// screen_scroll の方向 (LOCATE/SCROLL 経由で渡される数値)。値はカーソル
+// コードと一致するが、意味が異なる別ドメインなので別途定義する。
 const SCROLL_LEFT: i32 = 28;
 const SCROLL_RIGHT: i32 = 29;
 const SCROLL_UP: i32 = 30;
@@ -191,7 +177,7 @@ impl Machine {
     }
 
     /// 通常の文字描画に加え、改行・カーソル移動・編集系の制御コード
-    /// (CC_*) と LOCATE 連動シーケンスをすべてここで処理する。
+    /// ([`crate::keycodes`]) と LOCATE 連動シーケンスをすべてここで処理する。
     pub fn screen_putc(&mut self, c: u8) {
         if self.screen_locatemode != 0 {
             if self.screen_locatemode == 2 {
@@ -233,10 +219,10 @@ impl Machine {
                 self.screen_putc(b' ');
                 self.screen_putc(b' ');
             }
-            CC_BACKSPACE | CC_DELETE => {
+            BACKSPACE | DELETE => {
                 // DEL: その場の文字を詰めるだけでカーソルは動かさない。
                 // BS : 1 文字前へ戻った上で詰める。
-                if c == CC_BACKSPACE {
+                if c == BACKSPACE {
                     if self.cursorx > 0 {
                         self.cursorx -= 1;
                     } else if self.cursory > 0
@@ -262,7 +248,7 @@ impl Machine {
                     self.vram_mut()[i] = 0;
                 }
             }
-            CC_CURSOR_LEFT => {
+            CURSOR_LEFT => {
                 if self.cursorx > 0 {
                     self.cursorx -= 1;
                 } else if self.cursory > 0
@@ -273,7 +259,7 @@ impl Machine {
                     self.cursorx = w as i32 - 1;
                 }
             }
-            CC_CURSOR_RIGHT => {
+            CURSOR_RIGHT => {
                 let at_last_cell =
                     self.cursorx == w as i32 - 1 && self.cursory == h as i32 - 1;
                 let current_idx = self.cursory as usize * w + self.cursorx as usize;
@@ -287,32 +273,32 @@ impl Machine {
                     }
                 }
             }
-            CC_CURSOR_UP => {
+            CURSOR_UP => {
                 if self.cursory > 0 {
                     self.cursory -= 1;
                     self.cursor_snap_to_text();
                 }
             }
-            CC_CURSOR_DOWN => {
+            CURSOR_DOWN => {
                 if self.cursory < h as i32 - 1 {
                     self.cursory += 1;
                     self.cursor_snap_to_text();
                 }
             }
-            CC_LINE_SPLIT => {
+            LINE_SPLIT => {
                 self.screen_enter();
             }
-            CC_FORM_FEED => {
+            FORM_FEED => {
                 let now = self.cursory as usize * w + self.cursorx as usize;
                 self.vram_mut()[now..w * h].fill(0);
             }
-            CC_LOCATE_PREFIX => {
+            LOCATE_PREFIX => {
                 self.screen_locatemode = 2;
             }
-            CC_KANA_TOGGLE => {
+            KANA_TOGGLE => {
                 self.key_kana = !self.key_kana;
             }
-            CC_INSERT_TOGGLE => {
+            INSERT_TOGGLE => {
                 self.key_insert = !self.key_insert;
             }
             _ => {
