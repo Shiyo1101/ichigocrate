@@ -82,6 +82,14 @@ impl Machine {
     /// 呼出元 (UI アプリ) へ制御を返し、以降は `basic_step` を毎フレーム
     /// 呼び出してプログラムを進める。
     pub fn basic_execute(&mut self, commandline_pc: usize) -> BasicResult {
+        // プログラム実行中の画面出力 (PRINT 等) は上書きモードに固定する
+        // (元 C 版 exec() の `_g.screen_insertmode = 1` 相当)。対話編集の
+        // 挿入/上書きはホストが各キー処理前に sync_insert_mode() で復元する。
+        self.screen_insertmode = true;
+        // 実行中はカーソルを非表示にする (元 C 版 exec() の screen_showCursor(0)
+        // 相当)。REPL に戻るとホストが cursorflg を再び立てる。プログラムが
+        // LOCATE x,y,1 で明示的に表示することは引き続き可能。
+        self.cursorflg = false;
         self.basic_start(commandline_pc);
         let started_in_list =
             (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&commandline_pc);
@@ -158,6 +166,7 @@ impl Machine {
             TOKEN_CLO => self.command_clo(),
             TOKEN_RENUM => self.command_renum(),
             TOKEN_SCROLL => self.command_scroll(),
+            TOKEN_VIDEO => self.command_video(),
             TOKEN_BEEP => self.command_beep(),
             TOKEN_TEMPO => self.command_tempo(),
             TOKEN_PLAY => self.command_play(),
