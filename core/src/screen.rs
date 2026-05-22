@@ -4,12 +4,7 @@ use crate::font::CHAR_PATTERN_JP;
 use crate::machine::{calc_div, Machine};
 use crate::ram::*;
 
-// ============================================================
-// VRAM/REPL で使う制御コード (IchigoJam 標準準拠)
-// ============================================================
-//
-// 元 C 実装は数値リテラルを直書きしていたため、ここで意味のある名前を
-// 与えてマッチ式の意図を明らかにする。
+// ---- IchigoJam 標準の制御コード (元 C は数値リテラル直書きだったもの) ----
 
 /// FF: カーソル以降を消去
 const CC_FORM_FEED: u8 = 12;
@@ -39,7 +34,6 @@ const PCG_PIXEL_BASE: u8 = 128;
 const PCG_PIXEL_RANGE: std::ops::Range<u8> = PCG_PIXEL_BASE..(PCG_PIXEL_BASE + 16);
 
 impl Machine {
-    /// VRAM の生バッファ
     pub fn vram(&self) -> &[u8] {
         &self.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + SIZE_RAM_VRAM]
     }
@@ -52,7 +46,7 @@ impl Machine {
         &self.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG]
     }
 
-    /// PCG をフォントの末尾 32 文字で初期化する (CLP)
+    /// CLP: PCG をフォントの末尾 32 文字で初期化する。
     pub fn screen_clp(&mut self) {
         let src = &CHAR_PATTERN_JP[(0x100 - SIZE_PCG) * 8..(0x100 * 8)];
         self.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG].copy_from_slice(src);
@@ -61,9 +55,7 @@ impl Machine {
     pub fn screen_clear(&mut self) {
         self.cursorx = 0;
         self.cursory = 0;
-        for b in self.vram_mut() {
-            *b = 0;
-        }
+        self.vram_mut().fill(0);
     }
 
     pub fn video_clt(&mut self) {
@@ -158,7 +150,8 @@ impl Machine {
         self.cursorx = 0;
     }
 
-    /// 改行/カーソル/編集を含む 1 文字出力
+    /// 通常の文字描画に加え、改行・カーソル移動・編集系の制御コード
+    /// (CC_*) と LOCATE 連動シーケンスをすべてここで処理する。
     pub fn screen_putc(&mut self, c: u8) {
         if self.screen_locatemode != 0 {
             if self.screen_locatemode == 2 {
@@ -359,9 +352,7 @@ impl Machine {
         }
     }
 
-    // ============================================================
-    // ピクセル描画 (DRAW / POINT)
-    // ============================================================
+    // ---- ピクセル描画 (DRAW / POINT) ----
 
     pub fn screen_pset(&mut self, x: i32, y: i32, cmd: i32) -> u32 {
         let w = self.screenw as i32;
