@@ -48,6 +48,11 @@ pub struct Machine {
     pub cursory: i32,
     pub cursorflg: bool,
     pub screen_invert: bool,
+    /// 拡大表示の段階 (VIDEO 3/4 で 1 以上)。表示倍率は `1 << screen_big`。
+    /// 0 = 等倍, 1 = 2 倍, 2 = 4 倍, 3 = 8 倍 (元 C は最大 3 でクリップ)。
+    pub screen_big: u8,
+    /// 映像出力の有効/無効 (VIDEO 0 でオフ)。ホストはオフ時に黒画面を描画する。
+    pub video_enabled: bool,
 
     // ===== キーボード関連 (ホストが書く) =====
     pub key_kana: bool,
@@ -100,6 +105,14 @@ pub struct Machine {
     pub(crate) key_kana_buf_1: u8,
     /// 押下キーバッファ (REPL/INPUT/INKEY 用)
     pub(crate) keybuf: VecDeque<u8>,
+    /// 現在押下中のキー (BTN() 用)。ASCII コードで索引する押下フラグ。
+    /// ホストがキー押下/解放ごとに [`Machine::key_set_down`] で更新する。
+    pub(crate) keys_down: [bool; 256],
+    /// プログラムを継続実行中か。ホスト (アプリ) が毎フレーム自身の実行
+    /// ループ状態と同期させる。RUN 中は true、END/STOP/ESC ブレーク/完了で
+    /// false。`pc` は STOP/ブレーク後も CONT 用に保持されるため実行中判定には
+    /// 使えない。対話編集の入力可否はこのフラグで判断する。
+    pub program_running: bool,
     pub(crate) errorignore: bool,
     pub(crate) noresmode: bool,
 
@@ -172,13 +185,19 @@ impl Machine {
             screen_insertmode: true,
             screen_locatemode: 0,
             screen_invert: false,
+            screen_big: 0,
+            video_enabled: true,
 
-            key_insert: true,
+            // 既定は挿入モード (元 C 1.0.2b2 で key_flg.insert は 1→0 へ変更され、
+            // insert:0=挿入 / 1=上書き。screen.h:162 のコメント参照)。
+            key_insert: false,
             key_kana: false,
             key_kana_buf_0: 0,
             key_kana_buf_1: 0,
             key_flg_esc: 0,
             keybuf: VecDeque::with_capacity(128),
+            keys_down: [false; 256],
+            program_running: false,
             errorignore: false,
             noresmode: false,
 
@@ -501,6 +520,41 @@ impl Machine {
         }
     }
 
+    /// BTN() 用にキーの押下/解放状態を記録する。`code` はキーに対応する
+    /// ASCII コード (矢印は 28-31、スペースは 32、英字は大文字コード等)。
+    pub fn key_set_down(&mut self, code: u8, down: bool) {
+        self.keys_down[code as usize] = down;
+    }
+
+    /// 全キーの押下状態をクリアする (ウィンドウのフォーカス喪失時など、
+    /// 解放イベントを取りこぼしてキーが押しっぱなしになるのを防ぐ)。
+    pub fn key_clear_down(&mut self) {
+        self.keys_down = [false; 256];
+    }
+
+    /// BTN(n): キーボードを実機ボタンの代用にする。
+    /// - `n == 0`: 実機の本体ボタン。デスクトップには無いので常に 0。
+    /// - `n < 0`: 押下中キーのビットマスク
+    ///   (bit0:← bit1:→ bit2:↑ bit3:↓ bit4:スペース bit5:X)。
+    /// - `n > 0`: ASCII コード `n` のキーが押下中なら 1、そうでなければ 0。
+    pub(crate) fn btn(&self, n: i16) -> i16 {
+        if n == 0 {
+            0
+        } else if n < 0 {
+            let bit = |code: usize, shift: u8| -> i16 {
+                if self.keys_down[code] {
+                    1 << shift
+                } else {
+                    0
+                }
+            };
+            bit(28, 0) | bit(29, 1) | bit(30, 2) | bit(31, 3) | bit(32, 4) | bit(88, 5)
+        } else {
+            let code = n as usize;
+            i16::from(code < self.keys_down.len() && self.keys_down[code])
+        }
+    }
+
     // ---- ローマ字かな入力 ----
 
     /// カナモードを反転し、未確定バッファをクリアする。
@@ -510,10 +564,41 @@ impl Machine {
         self.key_kana_buf_1 = 0;
     }
 
+    /// 対話編集 (REPL) の各キー処理前に呼ぶ。挿入/上書きモードをユーザの
+    /// トグル状態 `key_insert` に同期する (元 C 版 REPL ループの
+    /// `_g.screen_insertmode = key_flg.insert` 相当)。`key_insert` が false
+    /// なら挿入、true なら上書き。プログラム実行中の出力は basic_execute が
+    /// 上書きへ固定するので、ホストは実行中はこれを呼ばないこと。
+    pub fn sync_insert_mode(&mut self) {
+        self.screen_insertmode = self.key_insert;
+    }
+
+    /// プログラムを継続実行中か。対話編集 (入力・カーソル移動) を行わない
+    /// 判定に使う。`pc` は STOP/ESC ブレーク後も CONT 用に保持されるため
+    /// 判定には使えず、ホストが同期する [`Machine::program_running`] を見る。
+    pub fn is_executing(&self) -> bool {
+        self.program_running
+    }
+
+    /// 対話編集用の制御コード入力 (矢印・BS・DEL・Home/End 等)。
+    /// プログラム実行中はカーソル移動・画面編集を行わず無視する
+    /// (元 C 版が実行中はキー入力を画面エディタへ流さないのに倣う)。
+    /// 文字出力 (PRINT 等) は `put_chr`/`screen_putc` を直接使うため影響しない。
+    pub fn input_control(&mut self, code: u8) {
+        if self.is_executing() {
+            return;
+        }
+        self.screen_putc(code);
+    }
+
     /// テキスト入力 1 文字を画面へ反映する。
     /// カナモード ON の時はローマ字 → 半角カナへ変換し、BS による
     /// 直前文字の書き換えも含めて `screen_putc` へ流す。
+    /// プログラム実行中は対話編集を行わないため無視する。
     pub fn input_putc(&mut self, c: u8) {
+        if self.is_executing() {
+            return;
+        }
         if !self.key_kana {
             self.screen_putc(c);
             return;
