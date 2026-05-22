@@ -58,6 +58,25 @@ impl Machine {
         self.vram_mut().fill(0);
     }
 
+    /// 表示中の論理画面の桁数 (拡大時は縮む)。ホストの描画ループが参照する。
+    pub fn screen_cols(&self) -> usize {
+        self.screenw
+    }
+
+    /// 表示中の論理画面の行数 (拡大時は縮む)。
+    pub fn screen_rows(&self) -> usize {
+        self.screenh
+    }
+
+    /// VIDEO オン処理 (元 C IchigoJam_P の `video_on`)。拡大段階に合わせて
+    /// 論理画面サイズを `SCREEN_W/H >> screen_big` に再設定する。これにより
+    /// 折り返し位置・カーソル可動範囲が拡大倍率へ追従する。
+    pub fn video_on(&mut self) {
+        self.video_enabled = true;
+        self.screenw = SCREEN_W >> self.screen_big as u32;
+        self.screenh = SCREEN_H >> self.screen_big as u32;
+    }
+
     pub fn video_clt(&mut self) {
         self.frames = 0;
         self.linecnt = 0;
@@ -148,6 +167,27 @@ impl Machine {
             self.cursory += 1;
         }
         self.cursorx = 0;
+    }
+
+    /// UP/DOWN でカーソルを縦移動した後、テキストエディタのように
+    /// 入力済み領域の末尾へカーソルを引き戻す (元 C の UP/DOWN 処理に倣う)。
+    /// 挿入モードでカーソル先が空白セルのとき、左隣が空でなくなる位置
+    /// (= テキスト末尾) まで、なければ 0 列まで戻す。上書きモードでは
+    /// 実機同様に自由移動とし、何もしない。
+    fn cursor_snap_to_text(&mut self) {
+        if self.screen_insertmode {
+            return; // 上書きモードは自由移動 (実機準拠)
+        }
+        let w = self.screenw;
+        let row = self.cursory as usize * w;
+        // カーソル先に文字があるならスナップ不要 (テキスト上)
+        if self.vram()[row + self.cursorx as usize] != 0 {
+            return;
+        }
+        // 左隣が空白の間だけ戻る。0 列へはいくらでも到達できる。
+        while self.cursorx > 0 && self.vram()[row + self.cursorx as usize - 1] == 0 {
+            self.cursorx -= 1;
+        }
     }
 
     /// 通常の文字描画に加え、改行・カーソル移動・編集系の制御コード
@@ -250,11 +290,13 @@ impl Machine {
             CC_CURSOR_UP => {
                 if self.cursory > 0 {
                     self.cursory -= 1;
+                    self.cursor_snap_to_text();
                 }
             }
             CC_CURSOR_DOWN => {
                 if self.cursory < h as i32 - 1 {
                     self.cursory += 1;
+                    self.cursor_snap_to_text();
                 }
             }
             CC_LINE_SPLIT => {
