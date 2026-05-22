@@ -1,7 +1,7 @@
 //! 最小限の動作確認テスト
 
-use ichigojam_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM, SCREEN_W};
-use ichigojam_core::PC_NULL;
+use ichigojam_core::keycodes::{CURSOR_DOWN, CURSOR_UP, INSERT_TOGGLE};
+use ichigojam_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM, PC_NULL, SCREEN_W};
 
 fn screen_text(m: &Machine) -> String {
     let mut s = String::new();
@@ -287,11 +287,6 @@ fn editor_input_works_when_idle() {
     assert_eq!(m.cursorx, 1);
 }
 
-// 制御コード (screen_putc 用)
-const KEY_UP: u8 = 30;
-const KEY_DOWN: u8 = 31;
-const KEY_INSERT_TOGGLE: u8 = 17;
-
 #[test]
 fn cursor_down_snaps_to_text_like_editor() {
     // ユーザ例:
@@ -307,11 +302,11 @@ fn cursor_down_snaps_to_text_like_editor() {
     assert_eq!((m.cursorx, m.cursory), (7, 0));
 
     // 下移動 → "AAAA" の末尾 (列 4, 行 1) へスナップ
-    m.screen_putc(KEY_DOWN);
+    m.screen_putc(CURSOR_DOWN);
     assert_eq!((m.cursorx, m.cursory), (4, 1));
 
     // さらに下移動 → 空行なので 0 列 (行 2) へ
-    m.screen_putc(KEY_DOWN);
+    m.screen_putc(CURSOR_DOWN);
     assert_eq!((m.cursorx, m.cursory), (0, 2));
 }
 
@@ -324,7 +319,7 @@ fn cursor_up_snaps_to_text_end() {
 
     // "CDEFG" の末尾 (列 5, 行 1)
     m.screen_locate(5, 1);
-    m.screen_putc(KEY_UP);
+    m.screen_putc(CURSOR_UP);
     // 上の行の短いテキスト "AB" の末尾 (列 2, 行 0) へスナップ
     assert_eq!((m.cursorx, m.cursory), (2, 0));
 }
@@ -335,13 +330,26 @@ fn cursor_free_move_in_overwrite_mode() {
     m.put_str("AB\n");
     m.put_str("CDEFG\n");
     // 挿入/上書きトグルで上書きモードへ
-    m.screen_putc(KEY_INSERT_TOGGLE);
+    m.screen_putc(INSERT_TOGGLE);
     m.sync_insert_mode();
 
     m.screen_locate(5, 1);
-    m.screen_putc(KEY_UP);
+    m.screen_putc(CURSOR_UP);
     // 上書きモードはスナップせず自由移動 (実機準拠)
     assert_eq!((m.cursorx, m.cursory), (5, 0));
+}
+
+#[test]
+fn cursor_width_follows_edit_mode() {
+    let mut m = Machine::new();
+    // 既定の挿入モードはカーソルが左半分 (細い)
+    m.sync_insert_mode();
+    assert!(!m.cursor_full_width(), "挿入モードは左半分カーソル");
+
+    // 挿入/上書きトグルで上書きモードへ → カーソルは全幅
+    m.screen_putc(INSERT_TOGGLE);
+    m.sync_insert_mode();
+    assert!(m.cursor_full_width(), "上書きモードは全幅カーソル");
 }
 
 #[test]
