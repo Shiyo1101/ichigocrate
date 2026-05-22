@@ -39,7 +39,8 @@ const FKEY_BINDINGS: &[(Key, &str, bool)] = &[
     (Key::F5, "RUN", true),
     (Key::F6, "?FREE()", true),
     (Key::F7, "?VER()", true),
-    (Key::F8, "FILES", true),
+    (Key::F8, "VIDEO", false),
+    (Key::F9, "FILES", true),
 ];
 
 /// egui の `Key` から REPL/エディタが扱う制御コードへのマップ。
@@ -256,6 +257,20 @@ impl App for IchigoApp {
             self.next_tick_time = now;
         }
 
+        // 実行中フラグをマシンへ同期する。これにより input_putc /
+        // input_control が実行中の対話編集を無視できる。`pc` は STOP/ESC
+        // ブレーク後も CONT 用に残るため判定には使えず、ここで self.running を
+        // 用いるのが要点 (ブレーク後は running=false なので入力が復活する)。
+        self.machine.program_running = self.running;
+
+        // 対話編集中は挿入/上書きモードをユーザ設定に同期し、カーソルを
+        // 表示する (元 C 版 REPL の screen_showCursor(1) 相当)。実行中は
+        // basic_execute がカーソルを消すので触らない (プログラムの LOCATE
+        // による表示制御を尊重)。
+        if !self.running {
+            self.machine.sync_insert_mode();
+            self.machine.cursorflg = true;
+        }
         process_keyboard(ctx, &mut self.machine);
 
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -436,23 +451,42 @@ impl IchigoApp {
 
 fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
     let mut pixels = vec![Color32::BLACK; IMG_W * IMG_H];
+
+    // VIDEO 0: 映像オフ。VRAM の内容に関わらず黒画面を返す。
+    if !machine.video_enabled {
+        return ColorImage {
+            size: [IMG_W, IMG_H],
+            pixels,
+        };
+    }
+
     let vram = machine.vram();
     let pcg = machine.pcg();
     let invert = machine.screen_invert;
     let show_cursor = machine.cursorflg && (blink_phase & 1) == 0;
+
+    // VIDEO 3/4 の拡大表示。論理画面サイズ (cols×rows) は VIDEO で
+    // SCREEN_W/H >> screen_big に縮められており、VRAM のストライドも cols。
+    // 倍率 zoom = 1 << screen_big を掛けると cols*zoom*FONT_W == IMG_W と
+    // なるため、可視領域をそのまま IMG_W×IMG_H へ引き伸ばせる。
+    let big = machine.screen_big.min(3) as u32;
+    let zoom = 1usize << big;
+    let cols = machine.screen_cols();
+    let rows = machine.screen_rows();
+
     let cursor_idx = if machine.cursory >= 0
-        && machine.cursory < SCREEN_H as i32
+        && machine.cursory < rows as i32
         && machine.cursorx >= 0
-        && machine.cursorx < SCREEN_W as i32
+        && machine.cursorx < cols as i32
     {
-        Some(machine.cursory as usize * SCREEN_W + machine.cursorx as usize)
+        Some(machine.cursory as usize * cols + machine.cursorx as usize)
     } else {
         None
     };
 
-    for cy in 0..SCREEN_H {
-        for cx in 0..SCREEN_W {
-            let idx = cy * SCREEN_W + cx;
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let idx = cy * cols + cx;
             let ch = vram[idx];
             let glyph: &[u8] = if (0xE0..=0xFF).contains(&ch) {
                 let p = (ch as usize - 0xE0) * 8;
@@ -477,9 +511,14 @@ fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
                     } else {
                         Color32::BLACK
                     };
-                    let px = cx * FONT_W + col;
-                    let py = cy * FONT_H + row;
-                    pixels[py * IMG_W + px] = color;
+                    // 1 ソースピクセルを zoom×zoom ブロックに展開
+                    let px0 = (cx * FONT_W + col) * zoom;
+                    let py0 = (cy * FONT_H + row) * zoom;
+                    for dy in 0..zoom {
+                        for dx in 0..zoom {
+                            pixels[(py0 + dy) * IMG_W + (px0 + dx)] = color;
+                        }
+                    }
                 }
             }
         }
@@ -511,28 +550,60 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         }
         for &(k, code) in KEY_CONTROL_MAP {
             if i.key_pressed(k) {
-                // Backspace はカナ変換側の未確定バッファ管理も通したい
+                // Backspace はカナ変換側の未確定バッファ管理も通したい。
+                // input_putc / input_control は実行中は無視されるため、
+                // プログラム実行中にカーソルが動いたり画面が編集されない。
                 if k == Key::Backspace && m.key_kana {
                     m.input_putc(code);
                 } else {
-                    m.screen_putc(code);
+                    m.input_control(code);
                 }
             }
         }
-        // INKEY() 用キューにも積む
+        // ウィンドウがフォーカスを失っている間は解放イベントを取りこぼし、
+        // BTN() のキーが押しっぱなしになるため、押下状態を一括クリアする。
+        if !i.focused {
+            m.key_clear_down();
+        }
+        // INKEY() 用キューと BTN() 用の押下状態を更新
         for ev in &i.events {
-            if let egui::Event::Key {
-                key,
-                pressed: true,
-                ..
-            } = ev
-            {
-                if let Some(c) = key_to_inkey(*key) {
-                    m.key_push(c);
+            if let egui::Event::Key { key, pressed, .. } = ev {
+                if *pressed {
+                    if let Some(c) = key_to_inkey(*key) {
+                        m.key_push(c);
+                    }
+                }
+                // BTN() 用: 押下/解放どちらも記録する
+                if let Some(code) = key_to_btn_code(*key) {
+                    m.key_set_down(code, *pressed);
                 }
             }
         }
     });
+}
+
+/// egui の `Key` を BTN() が参照する ASCII コードへ変換する。
+/// 矢印 (28-31) とスペース (32) を明示マップし、英字 A-Z / 数字 0-9 は
+/// `Key::name()` (大文字 1 文字 / 数字 1 文字) からコードを得る。
+/// 例: X キー → 88 ('X')。
+fn key_to_btn_code(k: Key) -> Option<u8> {
+    Some(match k {
+        Key::ArrowLeft => 28,
+        Key::ArrowRight => 29,
+        Key::ArrowUp => 30,
+        Key::ArrowDown => 31,
+        Key::Space => 32,
+        _ => {
+            let bytes = k.name().as_bytes();
+            if bytes.len() == 1
+                && (bytes[0].is_ascii_uppercase() || bytes[0].is_ascii_digit())
+            {
+                bytes[0]
+            } else {
+                return None;
+            }
+        }
+    })
 }
 
 fn char_to_basic(c: char) -> Option<u8> {
