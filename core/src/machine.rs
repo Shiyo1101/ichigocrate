@@ -11,7 +11,6 @@ use crate::ram::*;
 
 pub const PC_NULL: usize = usize::MAX;
 
-/// BASIC 実行結果
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasicResult {
     /// 停止 (エラーまたは Break)
@@ -22,7 +21,6 @@ pub enum BasicResult {
     Edit,
 }
 
-/// 1 トークン
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Token {
     pub code: u16,
@@ -69,9 +67,7 @@ pub struct Machine {
     /// 残り待機フレーム数。0 でなければ basic_step は即 return する。
     pub wait_frames: u32,
 
-    // ============================================================
-    // ↓ 以下はクレート内専用フィールド
-    // ============================================================
+    // ---- 以下はクレート内専用 (`pub(crate)`) ----
 
     /// 直前のトークン取得開始位置 (token_back 用)
     pub(crate) lasttoken: usize,
@@ -216,9 +212,7 @@ impl Machine {
         self.storage = Some(storage);
     }
 
-    // ============================================================
-    // 乱数 (random.h より)
-    // ============================================================
+    // ---- 乱数 (random.h より) ----
 
     pub fn rnd_next(&mut self) -> u32 {
         let t = self.rndn[0] ^ (self.rndn[0].wrapping_shl(11));
@@ -242,11 +236,9 @@ impl Machine {
         self.rndn = [n as u32, 362436069, 521288629, 88675123];
     }
 
-    // ============================================================
-    // 変数アクセス (VAR 領域への薄いラッパ)
-    // ============================================================
+    // ---- 変数アクセス (VAR 領域の薄いラッパ) ----
 
-    /// 変数 var\[i\] を取得 (i は配列添字 0..102, 102..128 が A..Z)
+    /// `i` は配列添字 0..102、102..128 が A..Z に対応。
     pub fn var_get(&self, i: usize) -> i16 {
         self.read_i16_le(OFFSET_RAM_VAR + i * 2)
     }
@@ -271,9 +263,7 @@ impl Machine {
         self.ram[OFFSET_RAM_VAR..OFFSET_RAM_VAR + SIZE_RAM_VAR].fill(0);
     }
 
-    // ============================================================
-    // LIST (プログラム領域) 操作
-    // ============================================================
+    // ---- LIST (プログラム領域) 操作 ----
 
     pub fn list_get_number(&self, index: u16) -> i16 {
         self.read_i16_le(OFFSET_RAM_LIST + index as usize)
@@ -324,9 +314,7 @@ impl Machine {
         (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&self.pc)
     }
 
-    // ============================================================
-    // PEEK / POKE (仮想アドレス空間)
-    // ============================================================
+    // ---- PEEK / POKE (仮想アドレス空間) ----
 
     pub fn peek(&self, ad: i32) -> u8 {
         if ad < 0 {
@@ -354,10 +342,6 @@ impl Machine {
         }
     }
 
-    // ============================================================
-    // 基本初期化
-    // ============================================================
-
     pub fn basic_init(&mut self) {
         self.clear_vars();
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
@@ -368,9 +352,7 @@ impl Machine {
         self.screen_clp();
     }
 
-    // ============================================================
-    // エラー
-    // ============================================================
+    // ---- エラー ----
 
     pub fn command_error(&mut self, err: u8) {
         if self.errorignore {
@@ -408,7 +390,6 @@ impl Machine {
                     let line_no = n;
                     let s = format!(" in {}\n{} ", line_no, line_no);
                     self.put_str(&s);
-                    // 行文字列
                     let mut p = OFFSET_RAM_LIST + index as usize + 3;
                     while p < self.ram.len() {
                         let c = self.ram[p];
@@ -428,9 +409,7 @@ impl Machine {
         // psg_beep(10, 3) は省略 (エラー音はオプション)
     }
 
-    // ============================================================
-    // 文字出力 (put_chr / put_str / put_num)
-    // ============================================================
+    // ---- 文字出力 ----
 
     pub fn put_chr(&mut self, c: u8) {
         self.screen_putc(c);
@@ -497,18 +476,12 @@ impl Machine {
         }
     }
 
-    // ============================================================
-    // ESC 確認 (Break)
-    // ============================================================
-
-    /// ESC キーが押されているかを確認 (BASIC 実行のループ判定用)
+    /// ESC キーによる中断要求があるか。BASIC 実行ループの停止判定に使う。
     pub fn stop_execute(&self) -> bool {
         self.key_flg_esc != 0
     }
 
-    // ============================================================
-    // キーバッファ
-    // ============================================================
+    // ---- キーバッファ ----
 
     pub fn key_get_key(&mut self) -> i32 {
         match self.keybuf.pop_front() {
@@ -528,9 +501,7 @@ impl Machine {
         }
     }
 
-    // ============================================================
-    // ローマ字かな入力
-    // ============================================================
+    // ---- ローマ字かな入力 ----
 
     /// カナモードを反転し、未確定バッファをクリアする。
     pub fn toggle_kana(&mut self) {
@@ -558,9 +529,7 @@ impl Machine {
     }
 }
 
-// ============================================================
-// ユーティリティ
-// ============================================================
+// ---- 共通ユーティリティ ----
 
 #[inline]
 pub fn basic_toupper(c: u8) -> u8 {
