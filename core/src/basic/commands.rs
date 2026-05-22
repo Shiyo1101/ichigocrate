@@ -643,6 +643,51 @@ impl Machine {
         self.screen_locate(x, y);
     }
 
+    /// VIDEO n[,clkdiv] — 映像モード切替 (元 C の command_video を移植)。
+    ///
+    /// ```text
+    /// VIDEO 0 - 表示オフ
+    /// VIDEO 1 - 通常
+    /// VIDEO 2 - 反転
+    /// VIDEO 3 - 拡大
+    /// VIDEO 4 - 拡大反転
+    /// ```
+    ///
+    /// `(video - 1) >> 1` が拡大段階 (最大 3 でクリップ)、`video & 1 == 0`
+    /// が反転フラグ。clkdiv (省電力時のクロック分周) は実機固有なので
+    /// デスクトップ移植では読み飛ばすだけ。
+    pub(super) fn command_video(&mut self) {
+        let video = self.token_expression();
+        if self.err != 0 {
+            return;
+        }
+        // 第 2 引数 (clkdiv) は実機専用。値は捨てるが構文だけ受理する。
+        let _clkdiv = self.token_option1(1);
+        if self.err != 0 {
+            return;
+        }
+        self.token_end();
+        if self.err != 0 {
+            return;
+        }
+
+        if video != 0 {
+            let video = video.max(0);
+            self.screen_invert = (video & 1) == 0; // VIDEO 2, 4 -> 反転
+            let big = (((video - 1) >> 1).min(3)) as u8; // VIDEO 3, 4 -> 拡大
+            if big != self.screen_big {
+                // 拡大段階が変わると論理画面サイズも変わるため一旦クリアする。
+                self.screen_big = big;
+                self.video_on();
+                self.screen_clear();
+            } else {
+                self.video_on();
+            }
+        } else {
+            self.video_enabled = false;
+        }
+    }
+
     pub(super) fn command_scroll(&mut self) {
         let dir = self.token_expression();
         if self.err != 0 {
