@@ -95,11 +95,7 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-// ============================================================
-// macOS の IMK スパムを stderr からフィルタする
-// ============================================================
-//
-// IMK は AppKit のテキスト入力初期化時に
+// macOS の IMK は AppKit のテキスト入力初期化時に
 // "error messaging the mach port for IMKCFRunLoopWakeUpReliable"
 // を NSLog で吐く。アプリの動作には影響しないが見栄えが悪いので、
 // stderr を pipe してフィルタしたものを真の stderr に書き戻す。
@@ -109,14 +105,13 @@ fn filter_macos_stderr() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-    // 真の stderr を退避
     let real_stderr_fd = unsafe { libc::dup(libc::STDERR_FILENO) };
     if real_stderr_fd < 0 {
         return;
     }
     let real_stderr = unsafe { OwnedFd::from_raw_fd(real_stderr_fd) };
 
-    // パイプを作成し、stderr をパイプの書き込み側に張替え
+    // stderr をパイプの書き込み側に張替える
     let mut fds = [0i32; 2];
     if unsafe { libc::pipe(fds.as_mut_ptr()) } < 0 {
         return;
@@ -148,11 +143,7 @@ fn filter_macos_stderr() {
 #[allow(dead_code)]
 fn filter_macos_stderr() {}
 
-// ============================================================
-// DiskStorage: SAVE/LOAD/FILES のホスト側実装
-// ============================================================
-
-/// `~/.ichigojam-rs/` 以下にスロット番号ごとのバイナリファイルを置く。
+/// `~/.ichigojam-rs/slot_NN.ijb` にスロット単位で SAVE/LOAD する実装。
 #[derive(Debug)]
 struct DiskStorage {
     dir: PathBuf,
@@ -249,11 +240,10 @@ impl IchigoApp {
 impl App for IchigoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
-        // 高リフレッシュレートでも 60Hz 相当の更新間隔で再描画を要求
+        // ProMotion など高リフレッシュレート環境でも 60Hz 相当の周期で描画
         ctx.request_repaint_after(FRAME);
 
-        // ===== 60Hz tick (PSG・frames カウンタ) =====
-        // 実時間に同期して必要回数だけ進める (ディスプレイ周波数に依存しない)
+        // 60Hz tick (PSG / frames) を実時間に同期して必要回数だけ進める
         let mut tick_iterations = 0;
         while self.next_tick_time <= now && tick_iterations < 8 {
             self.machine.frames = self.machine.frames.wrapping_add(1);
@@ -266,16 +256,13 @@ impl App for IchigoApp {
             self.next_tick_time = now;
         }
 
-        // ===== 入力処理 =====
         process_keyboard(ctx, &mut self.machine);
 
-        // ESC でブレーク
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.machine.key_flg_esc = 1;
         }
 
-        // ファンクションキー: IchigoJam 標準ショートカット
-        // run=true は ENTER まで自動投入、false は文字挿入のみ
+        // F キー: run=true は ENTER まで自動投入、false は文字挿入のみ
         // (ユーザが続けてスロット番号等を入力できるよう待機)
         if !self.running {
             let fkey = ctx.input(|i| {
@@ -289,7 +276,7 @@ impl App for IchigoApp {
             }
         }
 
-        // ===== WAIT 期限チェック (実時間ベース) =====
+        // WAIT 期限チェック (実時間ベース)
         if let Some(deadline) = self.wait_until {
             if now >= deadline {
                 self.wait_until = None;
@@ -303,12 +290,11 @@ impl App for IchigoApp {
             self.machine.wait_frames = 0;
         }
 
-        // ===== BASIC 実行 =====
         if self.running {
             if self.wait_until.is_some() {
                 // WAIT 中: basic_step は呼ばない
             } else {
-                // プログラム継続実行: 1 フレームあたり最大 N 文 (UI 凍結防止)
+                // 1 フレームあたり最大 N 文に制限して UI 凍結を防ぐ
                 const MAX_STEPS_PER_FRAME: usize = 2000;
                 for _ in 0..MAX_STEPS_PER_FRAME {
                     if self.machine.wait_frames > 0 {
@@ -330,19 +316,14 @@ impl App for IchigoApp {
                     }
                 }
             }
-        } else {
-            // ENTER 押下時に行入力を確定
-            let enter_pressed = ctx.input(|i| i.key_pressed(Key::Enter));
-            if enter_pressed {
-                self.execute_current_line();
-            }
+        } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
+            self.execute_current_line();
         }
 
-        // ===== 音声共有更新 =====
         self.shared_tone
             .store(self.machine.current_tone_hz.to_bits(), Ordering::Relaxed);
 
-        // ===== カナモード インジケータ (ウィンドウタイトル) =====
+        // カナモードをウィンドウタイトルに反映
         if self.machine.key_kana != self.last_kana {
             let title = if self.machine.key_kana {
                 "IchigoJam BASIC (Rust port) — KANA"
@@ -353,8 +334,7 @@ impl App for IchigoApp {
             self.last_kana = self.machine.key_kana;
         }
 
-        // ===== 描画 =====
-        // カーソル点滅も実時間 (~333ms = 1/3 sec) ベース
+        // カーソル点滅は実時間 (~333ms 周期) で算出 (リフレッシュ非依存)
         let cursor_blink_phase =
             ((now - self.start_time).as_millis() / 333) as u32;
         let img = render_vram_to_image(&self.machine, cursor_blink_phase);
@@ -365,9 +345,7 @@ impl App for IchigoApp {
             self.texture = Some(ctx.load_texture("vram", img, opts));
         }
 
-        // ===== LED 表示 (デスクトップでは画面枠線の色で代用) =====
-        // 実機 IchigoJam の LED コマンドの代わりに、画面 (VRAM) を
-        // 囲む枠線を LED 1 で赤、LED 0 で消灯 (透明) にする。
+        // 実機 LED の代替: LED 1 で赤い枠、LED 0 で透明
         let border_color = if self.machine.led {
             Color32::from_rgb(230, 40, 40)
         } else {
@@ -419,11 +397,9 @@ impl IchigoApp {
     }
 
     fn execute_current_line(&mut self) {
-        // 改行を VRAM に挿入 (元 C と同様 enter キーで改行表示)
+        // 元 C と同様、ENTER 押下時に改行を VRAM へ書き込む
         self.machine.screen_putc(b'\n');
-        // 現在カーソル行を取得 (VRAM オフセット)
         let p = self.machine.screen_gets();
-        // VRAM から ASCII を取り出して文字列化
         let mut line = String::new();
         let mut q = p;
         while q < OFFSET_RAM_VRAM + SIZE_RAM_VRAM {
@@ -437,7 +413,6 @@ impl IchigoApp {
         if line.is_empty() {
             return;
         }
-        // line buffer にコピーして実行
         self.machine.key_flg_esc = 0;
         match exec_line(&mut self.machine, &line) {
             Ok(LineOutcome::Executed) => {
@@ -458,10 +433,6 @@ impl IchigoApp {
         }
     }
 }
-
-// ============================================================
-// VRAM → ColorImage
-// ============================================================
 
 fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
     let mut pixels = vec![Color32::BLACK; IMG_W * IMG_H];
@@ -520,10 +491,6 @@ fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
     }
 }
 
-// ============================================================
-// キーボード処理
-// ============================================================
-
 fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
     ctx.input(|i| {
         // F10: ローマ字 → 半角カナ変換のオン/オフ
@@ -532,7 +499,6 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         if i.key_pressed(Key::F10) {
             m.toggle_kana();
         }
-        // テキスト入力 (ASCII 文字)
         for ev in &i.events {
             if let egui::Event::Text(s) = ev {
                 for c in s.chars() {
@@ -543,7 +509,6 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 }
             }
         }
-        // 矢印キー、Backspace、Delete などの特殊キー
         for &(k, code) in KEY_CONTROL_MAP {
             if i.key_pressed(k) {
                 // Backspace はカナ変換側の未確定バッファ管理も通したい
@@ -597,10 +562,6 @@ fn key_to_inkey(k: Key) -> Option<u8> {
         _ => return None,
     })
 }
-
-// ============================================================
-// 音声 (cpal)
-// ============================================================
 
 fn start_audio(tone: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
