@@ -224,8 +224,11 @@ impl Machine {
                 n as i16
             }
             TOKEN_BTN => {
-                let _ = self.token_opt1();
-                0
+                let n = self.token_opt1();
+                if self.err != 0 {
+                    return 0;
+                }
+                self.btn(n)
             }
             TOKEN_POS => {
                 let n = self.token_opt1();
