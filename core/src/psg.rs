@@ -13,11 +13,10 @@ pub const PSG_DEFAULT_OCT: u8 = 3;
 pub const PSG_DEFAULT_LEN: u8 = 8;
 pub const PSG_DEFAULT_TEMPO: u16 = 120;
 
-/// MML の音階インデックス t (0=O1C, 1=O1C#, ...) を Hz に変換する。
-/// O3C を C4 (261.63 Hz) に揃える。
+/// 音階インデックス `t` (0=O1C, 1=O1C#, ...) を Hz に変換。
+/// t=24 が C4 (MIDI 60, 261.63 Hz) になるよう揃えている。
 fn t_to_hz(t: i32) -> f32 {
-    // t = 24 を C4 (MIDI 60) に揃える
-    let midi = 36.0 + t as f32; // t=0 ⇒ MIDI 36 (C2)、t=24 ⇒ MIDI 60 (C4)
+    let midi = 36.0 + t as f32;
     440.0 * (2.0f32).powf((midi - 69.0) / 12.0)
 }
 
@@ -230,7 +229,6 @@ impl Machine {
     }
 
     fn mml_parse_int(&mut self) -> u32 {
-        // 先頭スペースをスキップ
         while self.mml_peek() == b' ' {
             self.mml_advance();
         }
