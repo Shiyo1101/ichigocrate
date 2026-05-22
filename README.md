@@ -40,7 +40,8 @@ cargo run --release -p ichigojam-app
 | F5   | `RUN` を即時実行                                 |
 | F6   | `?FREE()` を即時実行                             |
 | F7   | `?VER()` を即時実行                              |
-| F8   | `FILES` を即時実行                               |
+| F8   | `VIDEO` を挿入 (モード番号を続けて入力 → Enter)  |
+| F9   | `FILES` を即時実行                               |
 | ESC  | プログラム中断 (Break)                           |
 | F10  | ローマ字 → 半角カナ変換のオン/オフ               |
 
@@ -69,10 +70,10 @@ LIST 領域のバイナリを直接読み書きする。
   GOSUB/RTN/GSB エイリアス, REM, INPUT (簡易), LIST, NEW, RUN, END,
   STOP, CONT, RENUM (簡易), HELP, OK, CLV, CLS, CLT, CLK, CLP,
   CLO, LED, OUT (no-op), POKE, COPY, LOCATE, SCROLL, WAIT, DRAW, BEEP,
-  PLAY, TEMPO, SRND)
+  PLAY, TEMPO, SRND, VIDEO)
 - 式評価 (算術、ビット演算、論理演算、比較、優先順位 5 段階)
 - 関数 (ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS,
-  SOUND, ANA (no-op), BTN (no-op), IN (no-op), SCR, VPEEK, POINT,
+  SOUND, ANA (no-op), BTN (キーボード代用), IN (no-op), SCR, VPEEK, POINT,
   CHR$/STR$/DEC$/HEX$/BIN$, SIN/COS, USR (no-op))
 - LIST 領域への行編集・削除・LIST 表示・RUN
 - ストレージ (SAVE / LOAD / LRUN / FILES) — ホスト側は
@@ -84,12 +85,29 @@ LIST 領域のバイナリを直接読み書きする。
 - 実時間ベースの WAIT (ディスプレイ周波数に依存せず正確に N/60 秒待機)
 - egui キーボード入力 (テキスト + 矢印 + Backspace + Delete + Home/End)
 - 大文字自動変換 (CAPS デフォルト ON)
-- F1-F8 ショートカット
+- 行編集は挿入モード (IchigoJam 標準。文字間にカーソルを置いて入力すると
+  後続文字を上書きせず挿入)。プログラム実行中の画面出力は上書きモード
+- 挿入モードのカーソル縦移動はテキストエディタ風: ↑↓ で移動先の列が
+  空白なら、その行のテキスト末尾 (なければ 0 列) へ引き戻す。上書きモードは
+  実機同様に自由移動
+- プログラム実行中はカーソルを非表示にし、キー入力による画面編集・カーソル
+  移動も無効化する (IchigoJam 標準。INKEY()/BTN() 用のキー取得は継続)。
+  プログラム側の LOCATE x,y,1 による明示的なカーソル表示は可能
+- F1-F9 ショートカット
+- VIDEO モード切替 (0:オフ 1:通常 2:反転 3:拡大 4:拡大反転)。拡大時は
+  論理画面サイズ自体が `32/24 >> 拡大段階` に縮み (16x12 / 8x6 / 4x3)、
+  折り返し位置やカーソル可動範囲も倍率に追従する
 - cpal 矩形波音声出力
 - ESC によるブレーク
 - macOS の IMK 関連ログ抑制 (stderr フィルタ)
 - LED コマンド (実機 LED の代わりに画面の枠線を赤く点灯。`LED 0` で消灯)
 - ローマ字 → 半角カナ変換 (F10 で切替、JIS X 0201 カタカナ出力)
+- BTN() — 実機ボタンの代わりにキーボードの押下状態を返す。
+  `BTN()` / `BTN(0)` は本体ボタン相当でデスクトップでは常に 0。
+  `BTN(n)` は ASCII コード `n` のキーが押下中なら 1
+  (28:← 29:→ 30:↑ 31:↓ 32:スペース 88:X、英字 A-Z / 数字 0-9 も可)。
+  `BTN(-1)` は押下中キーのビットマスク
+  (bit0:← 1:→ 2:↑ 3:↓ 4:スペース 5:X)
 
 **未実装 (スコープ外)**
 
@@ -99,7 +117,7 @@ LIST 領域のバイナリを直接読み書きする。
 - USB キーボード固有のキーコード変換
 - UART
 - PWM / DAC / KBD コマンド
-- VIDEO モード切替 (拡大表示)
+- VIDEO の clkdiv 引数 (省電力時のクロック分周は実機固有のため読み飛ばし)
 
 ## 動作確認テスト
 
