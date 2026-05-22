@@ -19,7 +19,7 @@ use eframe::{egui, App, CreationContext};
 use egui::{Color32, ColorImage, Key, TextureHandle, TextureOptions, Vec2};
 
 use ichigojam_core::{
-    exec_line,
+    exec_line, keycodes as kc,
     machine::{BasicResult, Storage, PC_NULL},
     LineOutcome, Machine, OFFSET_RAM_VRAM, SCREEN_H, SCREEN_W, SIZE_RAM_VRAM,
 };
@@ -45,17 +45,17 @@ const FKEY_BINDINGS: &[(Key, &str, bool)] = &[
 
 /// egui の `Key` から REPL/エディタが扱う制御コードへのマップ。
 const KEY_CONTROL_MAP: &[(Key, u8)] = &[
-    (Key::Backspace, 0x08),
-    (Key::Delete, 0x7f),
-    (Key::ArrowLeft, 28),
-    (Key::ArrowRight, 29),
-    (Key::ArrowUp, 30),
-    (Key::ArrowDown, 31),
-    (Key::Tab, b'\t'),
-    (Key::Home, 0x12),
-    (Key::End, 0x17),
-    (Key::PageUp, 0x13),
-    (Key::PageDown, 0x14),
+    (Key::Backspace, kc::BACKSPACE),
+    (Key::Delete, kc::DELETE),
+    (Key::ArrowLeft, kc::CURSOR_LEFT),
+    (Key::ArrowRight, kc::CURSOR_RIGHT),
+    (Key::ArrowUp, kc::CURSOR_UP),
+    (Key::ArrowDown, kc::CURSOR_DOWN),
+    (Key::Tab, kc::TAB),
+    (Key::Home, kc::HOME),
+    (Key::End, kc::END),
+    (Key::PageUp, kc::PAGE_UP),
+    (Key::PageDown, kc::PAGE_DOWN),
 ];
 
 fn main() -> eframe::Result<()> {
@@ -257,20 +257,7 @@ impl App for IchigoApp {
             self.next_tick_time = now;
         }
 
-        // 実行中フラグをマシンへ同期する。これにより input_putc /
-        // input_control が実行中の対話編集を無視できる。`pc` は STOP/ESC
-        // ブレーク後も CONT 用に残るため判定には使えず、ここで self.running を
-        // 用いるのが要点 (ブレーク後は running=false なので入力が復活する)。
-        self.machine.program_running = self.running;
-
-        // 対話編集中は挿入/上書きモードをユーザ設定に同期し、カーソルを
-        // 表示する (元 C 版 REPL の screen_showCursor(1) 相当)。実行中は
-        // basic_execute がカーソルを消すので触らない (プログラムの LOCATE
-        // による表示制御を尊重)。
-        if !self.running {
-            self.machine.sync_insert_mode();
-            self.machine.cursorflg = true;
-        }
+        self.sync_machine_before_input();
         process_keyboard(ctx, &mut self.machine);
 
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -306,15 +293,13 @@ impl App for IchigoApp {
         }
 
         if self.running {
-            if self.wait_until.is_some() {
-                // WAIT 中: basic_step は呼ばない
-            } else {
-                // 1 フレームあたり最大 N 文に制限して UI 凍結を防ぐ
+            // WAIT 中は basic_step を呼ばず実時間の経過を待つ。それ以外は
+            // 1 フレームあたり最大 N 文まで進めて UI 凍結を防ぐ。
+            if self.wait_until.is_none() {
                 const MAX_STEPS_PER_FRAME: usize = 2000;
                 for _ in 0..MAX_STEPS_PER_FRAME {
                     if self.machine.wait_frames > 0 {
-                        // ステップ中に WAIT が発火した → 次フレームへ
-                        break;
+                        break; // ステップ中に WAIT が発火 → 次フレームへ
                     }
                     if let Some(res) = self.machine.basic_step() {
                         self.running = false;
@@ -399,6 +384,22 @@ impl App for IchigoApp {
 }
 
 impl IchigoApp {
+    /// キーボード入力を処理する前に、マシン側の状態をフレームの実行状況へ
+    /// 同期する。
+    ///
+    /// `program_running` を立てることで `input_putc`/`input_control` が実行中の
+    /// 対話編集を無視する。判定に `pc` を使えないのが要点で、`pc` は STOP/ESC
+    /// ブレーク後も CONT 用に残るため、停止しても入力が復活しなくなってしまう。
+    /// 非実行 (REPL) 中は挿入/上書きモードを同期しカーソルを表示する
+    /// (元 C 版 REPL の `screen_showCursor(1)` 相当)。
+    fn sync_machine_before_input(&mut self) {
+        self.machine.program_running = self.running;
+        if !self.running {
+            self.machine.sync_insert_mode();
+            self.machine.cursorflg = true;
+        }
+    }
+
     /// F キーで指定コマンドを VRAM に挿入する。`run` が true なら直ちに実行、
     /// false ならカーソルだけ残し、ユーザが引数 (スロット番号など) を続けて
     /// 入力できるようにする。
@@ -464,6 +465,8 @@ fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
     let pcg = machine.pcg();
     let invert = machine.screen_invert;
     let show_cursor = machine.cursorflg && (blink_phase & 1) == 0;
+    // 実機準拠: 上書きモードは文字全体、挿入モードは左半分 (4px) だけ反転。
+    let cursor_full_width = machine.cursor_full_width();
 
     // VIDEO 3/4 の拡大表示。論理画面サイズ (cols×rows) は VIDEO で
     // SCREEN_W/H >> screen_big に縮められており、VRAM のストライドも cols。
@@ -503,7 +506,9 @@ fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
                     if invert {
                         on = !on;
                     }
-                    if cursor_here {
+                    // カーソル反転。挿入モードは左半分 (col < 4) のみ
+                    // 反転して細いカーソルにする (元 C の 0xf0 マスク相当)。
+                    if cursor_here && (cursor_full_width || col < FONT_W / 2) {
                         on = !on;
                     }
                     let color = if on {
@@ -550,9 +555,8 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         }
         for &(k, code) in KEY_CONTROL_MAP {
             if i.key_pressed(k) {
-                // Backspace はカナ変換側の未確定バッファ管理も通したい。
-                // input_putc / input_control は実行中は無視されるため、
-                // プログラム実行中にカーソルが動いたり画面が編集されない。
+                // カナモード中の Backspace は未確定バッファ管理のため
+                // input_putc を通す。それ以外の編集キーは input_control。
                 if k == Key::Backspace && m.key_kana {
                     m.input_putc(code);
                 } else {
@@ -588,12 +592,14 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
 /// 例: X キー → 88 ('X')。
 fn key_to_btn_code(k: Key) -> Option<u8> {
     Some(match k {
-        Key::ArrowLeft => 28,
-        Key::ArrowRight => 29,
-        Key::ArrowUp => 30,
-        Key::ArrowDown => 31,
-        Key::Space => 32,
+        Key::ArrowLeft => kc::CURSOR_LEFT,
+        Key::ArrowRight => kc::CURSOR_RIGHT,
+        Key::ArrowUp => kc::CURSOR_UP,
+        Key::ArrowDown => kc::CURSOR_DOWN,
+        Key::Space => kc::SPACE,
         _ => {
+            // 英字 A-Z / 数字 0-9 は Key::name() が 1 文字を返すのでその
+            // ASCII をそのままコードにする (例: X キー → 'X' == 88)。
             let bytes = k.name().as_bytes();
             if bytes.len() == 1
                 && (bytes[0].is_ascii_uppercase() || bytes[0].is_ascii_digit())
@@ -622,14 +628,13 @@ fn char_to_basic(c: char) -> Option<u8> {
 }
 
 fn key_to_inkey(k: Key) -> Option<u8> {
-    use Key::*;
     Some(match k {
-        ArrowLeft => 28,
-        ArrowRight => 29,
-        ArrowUp => 30,
-        ArrowDown => 31,
-        Space => b' ',
-        Enter => b'\n',
+        Key::ArrowLeft => kc::CURSOR_LEFT,
+        Key::ArrowRight => kc::CURSOR_RIGHT,
+        Key::ArrowUp => kc::CURSOR_UP,
+        Key::ArrowDown => kc::CURSOR_DOWN,
+        Key::Space => kc::SPACE,
+        Key::Enter => b'\n',
         _ => return None,
     })
 }
