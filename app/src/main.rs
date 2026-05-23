@@ -197,7 +197,8 @@ impl Storage for DiskStorage {
 
 struct IchigoApp {
     machine: Machine,
-    texture: Option<TextureHandle>,
+    /// VRAM → テクスチャ描画器 (バッファ使い回し + 変化時のみ再描画)
+    renderer: Renderer,
     /// 実行中フラグ (program_running)
     running: bool,
     /// 音声共有
@@ -231,7 +232,7 @@ impl IchigoApp {
         let now = Instant::now();
         Self {
             machine,
-            texture: None,
+            renderer: Renderer::new(),
             running: false,
             shared_tone,
             _audio_stream: audio_stream,
@@ -349,13 +350,7 @@ impl App for IchigoApp {
         // カーソル点滅は実時間 (~333ms 周期) で算出 (リフレッシュ非依存)
         let cursor_blink_phase =
             ((now - self.start_time).as_millis() / 333) as u32;
-        let img = render_vram_to_image(&self.machine, cursor_blink_phase);
-        let opts = TextureOptions::NEAREST;
-        if let Some(tex) = &mut self.texture {
-            tex.set(img, opts);
-        } else {
-            self.texture = Some(ctx.load_texture("vram", img, opts));
-        }
+        self.renderer.sync(ctx, &self.machine, cursor_blink_phase);
 
         // 実機 LED の代替: LED 1 で赤い枠、LED 0 で透明
         let border_color = if self.machine.led {
@@ -367,7 +362,7 @@ impl App for IchigoApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(Color32::BLACK))
             .show(ctx, |ui| {
-                if let Some(tex) = &self.texture {
+                if let Some(tex) = &self.renderer.texture {
                     let size = Vec2::new(
                         (IMG_W * PIXEL_SCALE) as f32,
                         (IMG_H * PIXEL_SCALE) as f32,
@@ -462,42 +457,126 @@ impl IchigoApp {
     }
 }
 
-fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
-    let mut pixels = vec![Color32::BLACK; IMG_W * IMG_H];
+/// VRAM をテクスチャへ反映する描画器。
+///
+/// - **C (バッファ再利用)**: ピクセルバッファ `pixels` を保持して使い回し、
+///   毎フレームの再確保 (旧 `vec![..]`) を排除する。
+/// - **B (dirty 判定)**: 表示に影響する状態 (VRAM・PCG・[`Scalars`]) を前回分と
+///   比較し、変化したフレームでだけ再描画と GPU への再アップロードを行う。
+///   待機中は大半のフレームでこの処理を丸ごとスキップできる。
+struct Renderer {
+    /// 使い回す RGBA バッファ (IMG_W×IMG_H)。
+    pixels: Vec<Color32>,
+    texture: Option<TextureHandle>,
+    /// 直前に描画した VRAM+PCG のスナップショット。
+    last_vram_pcg: Vec<u8>,
+    /// 直前に描画したスカラ状態。
+    last_scalars: Option<Scalars>,
+}
 
-    // VIDEO 0: 映像オフ。VRAM の内容に関わらず黒画面を返す。
-    if !machine.video_enabled {
-        return ColorImage {
-            size: [IMG_W, IMG_H],
-            pixels,
+/// 描画結果に影響する VRAM/PCG 以外の状態。dirty 判定に使う。
+#[derive(PartialEq)]
+struct Scalars {
+    invert: bool,
+    video: bool,
+    /// 拡大段階 (表示倍率は `1 << big`)。
+    big: u8,
+    /// 実際に反転描画されるカーソル: (セル index, 全角なら true)。
+    /// 非表示 (点滅オフ・範囲外) のときは `None`。
+    cursor: Option<(usize, bool)>,
+}
+
+impl Scalars {
+    fn capture(m: &Machine, blink_phase: u32) -> Self {
+        let cols = m.screen_cols();
+        let rows = m.screen_rows();
+        let show = m.cursorflg && (blink_phase & 1) == 0;
+        let in_range = m.cursory >= 0
+            && (m.cursory as usize) < rows
+            && m.cursorx >= 0
+            && (m.cursorx as usize) < cols;
+        let cursor = if show && in_range {
+            // 実機準拠: 上書きモードは文字全体、挿入モードは左半分のみ反転。
+            Some((
+                m.cursory as usize * cols + m.cursorx as usize,
+                m.cursor_full_width(),
+            ))
+        } else {
+            None
         };
+        Self {
+            invert: m.screen_invert,
+            video: m.video_enabled,
+            big: m.screen_big.min(3),
+            cursor,
+        }
+    }
+}
+
+impl Renderer {
+    fn new() -> Self {
+        Self {
+            pixels: vec![Color32::BLACK; IMG_W * IMG_H],
+            texture: None,
+            last_vram_pcg: Vec::new(),
+            last_scalars: None,
+        }
+    }
+
+    /// 表示状態が前回と変わっていればバッファを描き直し、テクスチャへ
+    /// アップロードする。変化がなければ何もしない。
+    fn sync(&mut self, ctx: &egui::Context, machine: &Machine, blink_phase: u32) {
+        let scalars = Scalars::capture(machine, blink_phase);
+        let vram = machine.vram();
+        let pcg = machine.pcg();
+
+        let unchanged = self.texture.is_some()
+            && self.last_scalars.as_ref() == Some(&scalars)
+            && self.last_vram_pcg.len() == vram.len() + pcg.len()
+            && self.last_vram_pcg[..vram.len()] == *vram
+            && self.last_vram_pcg[vram.len()..] == *pcg;
+        if unchanged {
+            return;
+        }
+
+        render_into(&mut self.pixels, machine, &scalars);
+
+        // スナップショット更新 (確保は初回のみ、以降は容量を再利用)。
+        self.last_vram_pcg.clear();
+        self.last_vram_pcg.extend_from_slice(vram);
+        self.last_vram_pcg.extend_from_slice(pcg);
+        self.last_scalars = Some(scalars);
+
+        let img = ColorImage {
+            size: [IMG_W, IMG_H],
+            pixels: self.pixels.clone(),
+        };
+        let opts = TextureOptions::NEAREST;
+        match &mut self.texture {
+            Some(tex) => tex.set(img, opts),
+            None => self.texture = Some(ctx.load_texture("vram", img, opts)),
+        }
+    }
+}
+
+/// `Scalars` で確定済みの表示状態に従い、VRAM を `pixels` に描き込む。
+///
+/// VIDEO 3/4 の拡大表示では論理画面サイズ (cols×rows) が `SCREEN_W/H >> big`
+/// に縮み、VRAM のストライドも cols になる。倍率 `zoom = 1 << big` を掛けると
+/// `cols*zoom*FONT_W == IMG_W` となるため、可視領域をそのまま IMG_W×IMG_H へ
+/// 引き伸ばせる。
+fn render_into(pixels: &mut [Color32], machine: &Machine, s: &Scalars) {
+    pixels.fill(Color32::BLACK);
+    // VIDEO 0: 映像オフ。VRAM の内容に関わらず黒画面。
+    if !s.video {
+        return;
     }
 
     let vram = machine.vram();
     let pcg = machine.pcg();
-    let invert = machine.screen_invert;
-    let show_cursor = machine.cursorflg && (blink_phase & 1) == 0;
-    // 実機準拠: 上書きモードは文字全体、挿入モードは左半分 (4px) だけ反転。
-    let cursor_full_width = machine.cursor_full_width();
-
-    // VIDEO 3/4 の拡大表示。論理画面サイズ (cols×rows) は VIDEO で
-    // SCREEN_W/H >> screen_big に縮められており、VRAM のストライドも cols。
-    // 倍率 zoom = 1 << screen_big を掛けると cols*zoom*FONT_W == IMG_W と
-    // なるため、可視領域をそのまま IMG_W×IMG_H へ引き伸ばせる。
-    let big = machine.screen_big.min(3) as u32;
-    let zoom = 1usize << big;
+    let zoom = 1usize << s.big as u32;
     let cols = machine.screen_cols();
     let rows = machine.screen_rows();
-
-    let cursor_idx = if machine.cursory >= 0
-        && machine.cursory < rows as i32
-        && machine.cursorx >= 0
-        && machine.cursorx < cols as i32
-    {
-        Some(machine.cursory as usize * cols + machine.cursorx as usize)
-    } else {
-        None
-    };
 
     for cy in 0..rows {
         for cx in 0..cols {
@@ -510,24 +589,21 @@ fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
                 let p = ch as usize * 8;
                 &ichigojam_core::font::CHAR_PATTERN_JP[p..p + 8]
             };
-            let cursor_here = Some(idx) == cursor_idx && show_cursor;
+            let cursor_here = matches!(s.cursor, Some((i, _)) if i == idx);
+            let cursor_full = matches!(s.cursor, Some((i, full)) if i == idx && full);
             for (row, &bits) in glyph.iter().enumerate() {
                 for col in 0..FONT_W {
                     let bit = (bits >> (7 - col)) & 1 != 0;
                     let mut on = bit;
-                    if invert {
+                    if s.invert {
                         on = !on;
                     }
-                    // カーソル反転。挿入モードは左半分 (col < 4) のみ
-                    // 反転して細いカーソルにする (元 C の 0xf0 マスク相当)。
-                    if cursor_here && (cursor_full_width || col < FONT_W / 2) {
+                    // カーソル反転。挿入モードは左半分 (col < 4) のみ反転して
+                    // 細いカーソルにする (元 C の 0xf0 マスク相当)。
+                    if cursor_here && (cursor_full || col < FONT_W / 2) {
                         on = !on;
                     }
-                    let color = if on {
-                        Color32::from_rgb(255, 255, 255)
-                    } else {
-                        Color32::BLACK
-                    };
+                    let color = if on { Color32::WHITE } else { Color32::BLACK };
                     // 1 ソースピクセルを zoom×zoom ブロックに展開
                     let px0 = (cx * FONT_W + col) * zoom;
                     let py0 = (cy * FONT_H + row) * zoom;
@@ -539,11 +615,6 @@ fn render_vram_to_image(machine: &Machine, blink_phase: u32) -> ColorImage {
                 }
             }
         }
-    }
-
-    ColorImage {
-        size: [IMG_W, IMG_H],
-        pixels,
     }
 }
 
