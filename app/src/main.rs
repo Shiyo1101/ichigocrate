@@ -626,12 +626,24 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         if i.key_pressed(Key::F10) {
             m.toggle_kana();
         }
+        // 元 C 版はキーバッファ (keybuf) が単一で、REPL 行編集 (IJB_input) も
+        // INKEY() も同じ key_getKey() から読む。本移植は行編集を
+        // input_putc/input_control が直接担うため、keybuf は INKEY() 専用に
+        // なっている。よって全打鍵を keybuf にも流す必要があるが、REPL 編集
+        // 中に積むと直接モードの INKEY() が編集文字を拾ってしまう (C 版は
+        // 行エディタが keybuf を消費し実行開始時には空)。そこで実行中のみ
+        // 積む。RUN は開始時に key_clear_key するのでこれで C と同じ挙動。
+        let executing = m.is_executing();
         for ev in &i.events {
             if let egui::Event::Text(s) = ev {
                 for c in s.chars() {
                     if let Some(b) = char_to_basic(c) {
                         // カナモード中はローマ字 → 半角カナ変換を通す
                         m.input_putc(b);
+                        // INKEY() 用: 英字・数字・記号・スペースを取りこぼさない
+                        if executing {
+                            m.key_push(b);
+                        }
                     }
                 }
             }
@@ -645,22 +657,25 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 } else {
                     m.input_control(code);
                 }
+                // INKEY() 用: 矢印 (28-31) や BS/DEL 等の制御コードも積む
+                if executing {
+                    m.key_push(code);
+                }
             }
+        }
+        // Enter は Text イベントにも KEY_CONTROL_MAP にも現れないため個別に。
+        // 非実行中は line 323 の REPL ハンドラが行確定に使う。
+        if executing && i.key_pressed(Key::Enter) {
+            m.key_push(b'\n');
         }
         // ウィンドウがフォーカスを失っている間は解放イベントを取りこぼし、
         // BTN() のキーが押しっぱなしになるため、押下状態を一括クリアする。
         if !i.focused {
             m.key_clear_down();
         }
-        // INKEY() 用キューと BTN() 用の押下状態を更新
+        // BTN() 用の押下/解放状態を更新
         for ev in &i.events {
             if let egui::Event::Key { key, pressed, .. } = ev {
-                if *pressed {
-                    if let Some(c) = key_to_inkey(*key) {
-                        m.key_push(c);
-                    }
-                }
-                // BTN() 用: 押下/解放どちらも記録する
                 if let Some(code) = key_to_btn_code(*key) {
                     m.key_set_down(code, *pressed);
                 }
@@ -708,18 +723,6 @@ fn char_to_basic(c: char) -> Option<u8> {
         b -= b'a' - b'A';
     }
     Some(b)
-}
-
-fn key_to_inkey(k: Key) -> Option<u8> {
-    Some(match k {
-        Key::ArrowLeft => kc::CURSOR_LEFT,
-        Key::ArrowRight => kc::CURSOR_RIGHT,
-        Key::ArrowUp => kc::CURSOR_UP,
-        Key::ArrowDown => kc::CURSOR_DOWN,
-        Key::Space => kc::SPACE,
-        Key::Enter => b'\n',
-        _ => return None,
-    })
 }
 
 fn start_audio(tone: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
