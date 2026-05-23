@@ -18,6 +18,19 @@ fn screen(m: &Machine) -> String {
     s
 }
 
+/// VRAM の y 行目を、最初の 0 (空セル) までの文字列として取り出す。
+fn vram_line(m: &Machine, y: usize) -> String {
+    let v = &m.ram[OFFSET_RAM_VRAM + y * SCREEN_W..OFFSET_RAM_VRAM + (y + 1) * SCREEN_W];
+    let mut s = String::new();
+    for c in v {
+        if *c == 0 {
+            break;
+        }
+        s.push(*c as char);
+    }
+    s
+}
+
 #[test]
 fn gosub_return() {
     let mut m = Machine::new();
@@ -115,6 +128,50 @@ fn save_load_roundtrip() {
     let t = screen(&m);
     assert!(t.contains("HELLO"), "{t}");
     assert!(t.contains("WORLD"), "{t}");
+}
+
+#[test]
+fn draw_two_args_sets_point() {
+    // DRAW x,y は点を描く (cmd 既定 = 1)
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "DRAW 20,20");
+    let _ = exec_line(&mut m, "?POINT(20,20)");
+    assert_eq!(vram_line(&m, 0), "1");
+}
+
+#[test]
+fn draw_three_args_uses_explicit_cmd() {
+    // DRAW x,y,c は cmd c で点を描く (1=セット, 0=クリア)
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "DRAW 20,20,1");
+    let _ = exec_line(&mut m, "?POINT(20,20)");
+    let _ = exec_line(&mut m, "DRAW 20,20,0");
+    let _ = exec_line(&mut m, "?POINT(20,20)");
+    assert_eq!(vram_line(&m, 0), "1");
+    assert_eq!(vram_line(&m, 1), "0");
+}
+
+#[test]
+fn draw_four_args_draws_line() {
+    // DRAW x1,y1,x2,y2 は線を描く (cmd 既定 = 1)
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "DRAW 20,20,30,20");
+    let _ = exec_line(&mut m, "?POINT(20,20)");
+    let _ = exec_line(&mut m, "?POINT(30,20)");
+    assert_eq!(vram_line(&m, 0), "1");
+    assert_eq!(vram_line(&m, 1), "1");
+}
+
+#[test]
+fn draw_five_args_draws_line_with_cmd() {
+    // DRAW x1,y1,x2,y2,c は cmd c で線を描く。
+    // 旧実装はここで pos[5] へ書き込みパニックしていた (回帰テスト)。
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "DRAW 20,20,30,30,1");
+    let _ = exec_line(&mut m, "?POINT(20,20)");
+    let _ = exec_line(&mut m, "?POINT(30,30)");
+    assert_eq!(vram_line(&m, 0), "1");
+    assert_eq!(vram_line(&m, 1), "1");
 }
 
 #[test]
