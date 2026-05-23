@@ -48,12 +48,9 @@ pub fn exec_line(machine: &mut Machine, line: &str) -> Result<LineOutcome, Basic
     match machine.basic_execute(OFFSET_RAM_LINEBUF) {
         BasicResult::Execute => Ok(LineOutcome::Executed),
         BasicResult::Edit => Ok(LineOutcome::Edited),
-        BasicResult::StopOrErr => match BasicError::from_code(machine.err) {
-            Some(err) => Err(err),
-            // err == 0 だが StopOrErr が返るケースは現状ない想定。
-            // 念のため Break として扱う (ESC のみ key_flg_esc 経由)。
-            None => Err(BasicError::Break),
-        },
+        // 停止理由は basic_step が last_error に記録済み。記録が無いケースは
+        // 現状想定しないが、念のため Break として扱う。
+        BasicResult::StopOrErr => Err(machine.last_error.unwrap_or(BasicError::Break)),
     }
 }
 
