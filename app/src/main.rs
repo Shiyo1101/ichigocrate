@@ -14,6 +14,11 @@ use std::time::{Duration, Instant};
 /// IchigoJam の論理 1 フレーム = 1/60 秒
 const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
+/// アイドル時 (REPL 待機) の再描画間隔。この状態で変化しうるのはカーソル
+/// 点滅 (約 333ms 周期) だけなので、60Hz ではなくこの低頻度で再描画を
+/// 要求し、待機中の CPU/GPU 消費を抑える。
+const IDLE_REPAINT: Duration = Duration::from_millis(333);
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use eframe::{egui, App, CreationContext};
 use egui::{Color32, ColorImage, Key, TextureHandle, TextureOptions, Vec2};
@@ -241,8 +246,6 @@ impl IchigoApp {
 impl App for IchigoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
-        // ProMotion など高リフレッシュレート環境でも 60Hz 相当の周期で描画
-        ctx.request_repaint_after(FRAME);
 
         // 60Hz tick (PSG / frames) を実時間に同期して必要回数だけ進める
         let mut tick_iterations = 0;
@@ -322,6 +325,15 @@ impl App for IchigoApp {
 
         self.shared_tone
             .store(self.machine.current_tone_hz.to_bits(), Ordering::Relaxed);
+
+        // 再描画頻度をマシンの状態で決める。プログラム実行中・発音中・WAIT
+        // 待機中は時間進行が必要なので 60Hz、それ以外の REPL 待機中はカーソル
+        // 点滅に追従できれば十分なので低頻度に落とす (入力時は egui が自動で
+        // 再描画するため取りこぼしはない)。ProMotion 等の高リフレッシュレート
+        // でもこの間隔が再描画の上限になる。
+        let needs_realtime =
+            self.running || self.machine.psg_sound() || self.wait_until.is_some();
+        ctx.request_repaint_after(if needs_realtime { FRAME } else { IDLE_REPAINT });
 
         // カナモードをウィンドウタイトルに反映
         if self.machine.key_kana != self.last_kana {
