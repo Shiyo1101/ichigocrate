@@ -64,6 +64,42 @@ fn fib_program() {
 }
 
 #[test]
+fn inkey_pops_buffered_keys_in_order() {
+    // INKEY() はキューに積まれたキーを押下順に 1 つずつ返し、空なら 0。
+    // (英字キーが取りこぼされる回帰バグの検出用)
+    let mut m = Machine::new();
+    m.key_push(b'A');
+    m.key_push(b'B');
+    let _ = exec_line(&mut m, "?INKEY()");
+    let _ = exec_line(&mut m, "?INKEY()");
+    let _ = exec_line(&mut m, "?INKEY()");
+    assert_eq!(vram_line(&m, 0), "65", "1st INKEY() should pop 'A'");
+    assert_eq!(vram_line(&m, 1), "66", "2nd INKEY() should pop 'B'");
+    assert_eq!(vram_line(&m, 2), "0", "empty queue should yield 0");
+}
+
+#[test]
+fn inkey_in_running_program() {
+    // 実行中に押された英字キーを INKEY() が拾えること。
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 K=INKEY()");
+    let _ = exec_line(&mut m, "20 IF K=0 GOTO 10");
+    let _ = exec_line(&mut m, "30 ?K");
+    let _ = exec_line(&mut m, "40 END");
+    let _ = exec_line(&mut m, "RUN"); // keybuf をクリアし LIST へ移行
+    // キー未入力の間は 10-20 をループ。数ステップ空回しする。
+    for _ in 0..50 {
+        m.wait_frames = 0;
+        let _ = m.basic_step();
+    }
+    // プログラム実行中にキーが押された状況を模す。
+    m.key_push(b'A');
+    run_to_completion(&mut m);
+    let t = screen(&m);
+    assert!(t.contains("65"), "INKEY() should return 65 for 'A': {t}");
+}
+
+#[test]
 fn nested_if_else() {
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "A=10:IF A>5 ?\"BIG\" ELSE ?\"SMALL\"");
