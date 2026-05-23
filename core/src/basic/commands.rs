@@ -372,15 +372,17 @@ impl Machine {
     }
 
     pub(super) fn command_ok(&mut self) {
-        let mut n = 0;
+        // 引数 2 で「応答抑制 (noresmode)」を有効化。それ以外は解除。
+        let mut quiet = false;
         if self.token_get_char() != 0 {
-            n = if self.token_expression() == 2 { 1 } else { 0 };
+            let arg = self.token_expression();
             if self.err != 0 {
                 return;
             }
+            quiet = arg == 2;
         }
         self.token_end();
-        self.noresmode = n != 0;
+        self.noresmode = quiet;
     }
 
     // ---- 入出力 (画面, 変数, ピクセル, GPIO no-op) ----
@@ -782,37 +784,43 @@ impl Machine {
         self.random_seed(n as i32);
     }
 
+    /// DRAW は 2〜5 個のカンマ区切り値を取り、その個数で点/線と既定 cmd を
+    /// 決める。`cmd` は描画モード (0=消去, 1=描画, 2=反転)。
+    ///
+    /// ```text
+    /// DRAW x,y            → 点を描画           PSET(x, y, 1)
+    /// DRAW x,y,c          → 点を cmd c で描画   PSET(x, y, c)
+    /// DRAW x1,y1,x2,y2    → 線を描画           LINE(x1,y1,x2,y2, 1)
+    /// DRAW x1,y1,x2,y2,c  → 線を cmd c で描画   LINE(x1,y1,x2,y2, c)
+    /// ```
     pub(super) fn command_draw(&mut self) {
-        let mut pos = [0i32; 5];
-        let mut i = 0;
-        while i < 5 {
-            pos[i] = self.token_expression() as i32;
+        let mut args = [0i32; 5];
+        let mut count = 0usize; // 読み取った引数の個数
+        while count < args.len() {
+            args[count] = self.token_expression() as i32;
             if self.err != 0 {
                 return;
             }
-            let code = self.token_get().code;
-            if code != TOKEN_COMMA {
+            count += 1;
+            if self.token_get().code != TOKEN_COMMA {
                 break;
             }
-            i += 1;
         }
-        // i は受け入れた数 - 1。元 C と整合させる
-        let i = i + 1;
-        if i == 1 {
-            self.command_error(ERR_SYNTAX_ERROR);
+        self.token_end();
+        if self.err != 0 {
             return;
         }
-        let i = if i & 1 == 1 {
-            pos[i] = 1;
-            i + 1
-        } else {
-            i
-        };
-        self.token_end();
-        if i == 2 {
-            self.screen_pset(pos[0], pos[1], pos[2]);
-        } else {
-            self.screen_line(pos[0], pos[1], pos[2], pos[3], pos[4]);
+        match count {
+            2 => {
+                self.screen_pset(args[0], args[1], 1);
+            }
+            3 => {
+                self.screen_pset(args[0], args[1], args[2]);
+            }
+            4 => self.screen_line(args[0], args[1], args[2], args[3], 1),
+            5 => self.screen_line(args[0], args[1], args[2], args[3], args[4]),
+            // 引数 1 個以下は座標が揃わないので構文エラー。
+            _ => self.command_error(ERR_SYNTAX_ERROR),
         }
     }
 
