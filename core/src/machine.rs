@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::errors::message_for_code;
+use crate::errors::BasicError;
 use crate::font::CHAR_PATTERN_JP;
 use crate::ram::*;
 
@@ -82,8 +82,9 @@ pub struct Machine {
     pub(crate) bklasttoken: Token,
     /// ブレーク時に保持される pc
     pub(crate) pcbreak: usize,
-    /// エラー番号 (0 なら無エラー)
-    pub(crate) err: u8,
+    /// 直近の停止理由 (エラーまたは Break)。実行ループ ([`Machine::basic_step`])
+    /// が `Err` を捕捉して格納し、境界 (`exec_line`) が読み取る。`None` は無エラー。
+    pub(crate) last_error: Option<BasicError>,
     /// GOSUB スタックの段数
     pub(crate) ngosubstack: u8,
     /// FOR スタックの段数
@@ -113,7 +114,6 @@ pub struct Machine {
     /// false。`pc` は STOP/ブレーク後も CONT 用に保持されるため実行中判定には
     /// 使えない。対話編集の入力可否はこのフラグで判断する。
     pub program_running: bool,
-    pub(crate) errorignore: bool,
     pub(crate) noresmode: bool,
 
     pub(crate) psgoct: u8,
@@ -169,7 +169,7 @@ impl Machine {
             lasttokenpc: 0,
             bklasttoken: Token::default(),
             pcbreak: PC_NULL,
-            err: 0,
+            last_error: None,
             ngosubstack: 0,
             nforstack: 0,
             gosubstack: [0; IJB_SIZEOF_GOSUB_STACK],
@@ -198,7 +198,6 @@ impl Machine {
             keybuf: VecDeque::with_capacity(128),
             keys_down: [false; 256],
             program_running: false,
-            errorignore: false,
             noresmode: false,
 
             psgoct: 3,
@@ -373,22 +372,17 @@ impl Machine {
 
     // ---- エラー ----
 
-    pub fn command_error(&mut self, err: u8) {
-        if self.errorignore {
-            return;
-        }
-        self.err = err;
-        self.basic_print_error();
-    }
-
-    pub fn basic_print_error(&mut self) {
+    /// 停止理由 `e` を画面に表示する (元 C の `basic_print_error` 相当)。
+    /// 実行ループが `Err` を捕捉した時点で 1 度だけ呼ぶ。`noresmode` 中は
+    /// 何も表示しない。
+    pub fn basic_print_error(&mut self, e: BasicError) {
         if self.noresmode {
             return;
         }
         if self.cursory == -1 {
             self.cursory = 0;
         }
-        let msg = message_for_code(self.err);
+        let msg = e.message();
         if !msg.is_empty() {
             // 借用衝突回避のためコピーしてから書き出す
             let s = msg.to_string();
