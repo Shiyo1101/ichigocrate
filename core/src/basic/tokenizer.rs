@@ -146,105 +146,76 @@ impl Machine {
         self.pc = self.lasttoken;
     }
 
-    // 以下のヘルパは「エラー時は self.err を立て、戻り値で呼出元に
-    // 早期 return すべきかを伝える」契約で統一されている。
+    // 以下のヘルパは `BResult` を返し、エラーは `Err(BasicError)` として
+    // 呼出元へ `?` で伝搬する契約で統一されている。
 
-    pub(super) fn expect_token(&mut self, code: u16) -> bool {
+    pub(super) fn expect_token(&mut self, code: u16) -> BResult<()> {
         if self.token_get().code == code {
-            true
+            Ok(())
         } else {
-            self.command_error(ERR_SYNTAX_ERROR);
-            false
+            Err(ERR_SYNTAX_ERROR)
         }
     }
 
-    pub(super) fn expect_paren_close(&mut self) -> bool {
+    pub(super) fn expect_paren_close(&mut self) -> BResult<()> {
         self.expect_token(TOKEN_PAREN_E)
     }
 
     /// `VAR` または `ARRAY` を読んで変数領域内のインデックスを返す。
-    pub(super) fn parse_lvalue_index(&mut self) -> Option<usize> {
+    pub(super) fn parse_lvalue_index(&mut self) -> BResult<usize> {
         let t = self.token_get();
         match t.code {
-            TOKEN_VAR => Some(t.value as usize),
-            TOKEN_ARRAY => {
-                let i = self.token_get_array_index();
-                if self.err != 0 {
-                    None
-                } else {
-                    Some(i)
-                }
-            }
-            _ => {
-                self.command_error(ERR_SYNTAX_ERROR);
-                None
-            }
+            TOKEN_VAR => Ok(t.value as usize),
+            TOKEN_ARRAY => self.token_get_array_index(),
+            _ => Err(ERR_SYNTAX_ERROR),
         }
     }
 
     /// 行末 (TOKEN_NULL / TOKEN_ELSE) なら `default`、そうでなければ式を 1 つ読む。
-    pub(super) fn parse_optional_expr(&mut self, default: i16) -> Option<i16> {
+    pub(super) fn parse_optional_expr(&mut self, default: i16) -> BResult<i16> {
         let code = self.token_get().code;
         self.token_back();
         if code == TOKEN_NULL || code == TOKEN_ELSE {
-            return Some(default);
+            return Ok(default);
         }
-        let v = self.token_expression();
-        if self.err != 0 {
-            return None;
-        }
-        Some(v)
+        self.token_expression()
     }
 
     /// `HEX$/BIN$/DEC$/STR$` のような `expr` または `expr,m` + `)` をパース。
-    pub(super) fn parse_format_args(&mut self, default_m: i16) -> Option<(i16, i16)> {
-        let n = self.token_expression();
-        if self.err != 0 {
-            return None;
-        }
+    pub(super) fn parse_format_args(&mut self, default_m: i16) -> BResult<(i16, i16)> {
+        let n = self.token_expression()?;
         let t = self.token_get();
         let m = if t.code == TOKEN_COMMA {
-            let m = self.token_expression();
-            if self.err != 0 {
-                return None;
-            }
-            if !self.expect_paren_close() {
-                return None;
-            }
+            let m = self.token_expression()?;
+            self.expect_paren_close()?;
             m
         } else if t.code == TOKEN_PAREN_E {
             default_m
         } else {
-            self.command_error(ERR_SYNTAX_ERROR);
-            return None;
+            return Err(ERR_SYNTAX_ERROR);
         };
-        Some((n, m))
+        Ok((n, m))
     }
 
-    pub(super) fn token_get_array_index(&mut self) -> usize {
-        let v = self.token_expression();
-        if self.err != 0 {
-            return 0;
-        }
-        let t = self.token_get();
-        if t.code != TOKEN_ARRAY_E {
-            self.command_error(ERR_SYNTAX_ERROR);
-            return 0;
+    pub(super) fn token_get_array_index(&mut self) -> BResult<usize> {
+        let v = self.token_expression()?;
+        if self.token_get().code != TOKEN_ARRAY_E {
+            return Err(ERR_SYNTAX_ERROR);
         }
         if v < 0 || v as usize >= crate::ram::IJB_SIZEOF_ARRAY {
-            self.command_error(ERR_INDEX_OUT_OF_RANGE);
-            return 0;
+            return Err(ERR_INDEX_OUT_OF_RANGE);
         }
-        v as usize
+        Ok(v as usize)
     }
 
     /// `TOKEN_NULL` か `TOKEN_ELSE` 以外なら Syntax error。
-    pub(super) fn token_end(&mut self) {
+    pub(super) fn token_end(&mut self) -> BResult<()> {
         let code = self.token_get().code;
         self.token_back();
         if code != TOKEN_NULL && code != TOKEN_ELSE {
-            self.command_error(ERR_SYNTAX_ERROR);
+            return Err(ERR_SYNTAX_ERROR);
         }
+        Ok(())
     }
 
     /// 文字列リテラル本体を画面に流して終端の `"` を消費する。
@@ -272,19 +243,16 @@ impl Machine {
     }
 
     /// 省略可能な `,expr` を読んでから文末を確認する (WAIT / RENUM 等)。
-    pub(super) fn token_option1(&mut self, default_value: i16) -> i16 {
-        if self.err != 0 {
-            return default_value;
-        }
+    pub(super) fn token_option1(&mut self, default_value: i16) -> BResult<i16> {
         let code = self.token_get().code;
         if code != TOKEN_COMMA {
             self.token_back();
-            self.token_end();
-            default_value
+            self.token_end()?;
+            Ok(default_value)
         } else {
-            let v = self.token_expression();
-            self.token_end();
-            v
+            let v = self.token_expression()?;
+            self.token_end()?;
+            Ok(v)
         }
     }
 }
