@@ -175,6 +175,30 @@ fn draw_five_args_draws_line_with_cmd() {
 }
 
 #[test]
+fn error_message_printed_at_repl() {
+    // REPL での実行時エラーは Err を返しつつ、画面にメッセージを表示する。
+    let mut m = Machine::new();
+    let r = exec_line(&mut m, "?1/0");
+    assert!(
+        matches!(r, Err(ichigojam_core::BasicError::DivideByZero)),
+        "{r:?}"
+    );
+    assert!(screen(&m).contains("Divide by 0"), "{}", screen(&m));
+}
+
+#[test]
+fn error_in_program_shows_line_number() {
+    // プログラム実行中のエラーは「メッセージ + in <行番号>」を表示する。
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 ?1/0");
+    let _ = exec_line(&mut m, "RUN");
+    run_to_completion(&mut m);
+    let t = screen(&m);
+    assert!(t.contains("Divide by 0"), "message missing:\n{t}");
+    assert!(t.contains("in 10"), "line number missing:\n{t}");
+}
+
+#[test]
 fn poke_peek_pcg() {
     let mut m = Machine::new();
     // PCG 領域 (0x700) に書き込んで読み戻し
