@@ -109,20 +109,23 @@ impl fmt::Display for BasicError {
 impl std::error::Error for BasicError {}
 
 // ============================================================
-// 後方互換: 内部実装が参照する数値定数
+// 内部実装が使うエラー伝搬の道具立て
 // ============================================================
-//
-// `Machine.err: u8` 経由のフラグ伝搬を維持しているため、内部処理は
-// 数値で代入する。Rust らしい書き方ではないが、basic.rs を全面書換
-// せずに済ませるための妥協。
 
-pub(crate) const ERR_SYNTAX_ERROR: u8 = BasicError::SyntaxError.code();
-pub(crate) const ERR_OUT_OF_MEMORY: u8 = BasicError::OutOfMemory.code();
-pub(crate) const ERR_STACK_OVERFLOW: u8 = BasicError::StackOverflow.code();
-pub(crate) const ERR_NOT_MATCH: u8 = BasicError::NotMatch.code();
-pub(crate) const ERR_UNDEFINED_LINE: u8 = BasicError::UndefinedLine.code();
-pub(crate) const ERR_DIVIDE_BY_ZERO: u8 = BasicError::DivideByZero.code();
-pub(crate) const ERR_INDEX_OUT_OF_RANGE: u8 = BasicError::IndexOutOfRange.code();
-pub(crate) const ERR_FILE_ERROR: u8 = BasicError::FileError.code();
-pub(crate) const ERR_ILLEGAL_ARGUMENT: u8 = BasicError::IllegalArgument.code();
-pub(crate) const ERR_BREAK: u8 = BasicError::Break.code();
+/// インタプリタ内部のエラー伝搬に使う `Result` 別名。各 `command_*` /
+/// `token_*` はこれを返し、`?` 演算子でそのまま呼出元へ伝搬する。
+/// 表示は最上位 ([`crate::machine::Machine::basic_step`]) に集約する。
+pub(crate) type BResult<T> = Result<T, BasicError>;
+
+// エラー値は数値コードではなく型付きの [`BasicError`] 定数として持つ。
+// 既存の呼出箇所が参照する短縮名を維持するための別名。
+pub(crate) const ERR_SYNTAX_ERROR: BasicError = BasicError::SyntaxError;
+pub(crate) const ERR_OUT_OF_MEMORY: BasicError = BasicError::OutOfMemory;
+pub(crate) const ERR_STACK_OVERFLOW: BasicError = BasicError::StackOverflow;
+pub(crate) const ERR_NOT_MATCH: BasicError = BasicError::NotMatch;
+pub(crate) const ERR_UNDEFINED_LINE: BasicError = BasicError::UndefinedLine;
+pub(crate) const ERR_DIVIDE_BY_ZERO: BasicError = BasicError::DivideByZero;
+pub(crate) const ERR_INDEX_OUT_OF_RANGE: BasicError = BasicError::IndexOutOfRange;
+pub(crate) const ERR_FILE_ERROR: BasicError = BasicError::FileError;
+pub(crate) const ERR_ILLEGAL_ARGUMENT: BasicError = BasicError::IllegalArgument;
+pub(crate) const ERR_BREAK: BasicError = BasicError::Break;
