@@ -1,123 +1,83 @@
-//! BASIC エラーを Rust 列挙型として表現する。
+//! BASIC エラー型と内部伝搬用の Result 別名。
 //!
-//! 内部処理は依然として `Machine.err: u8` のフラグを伝搬させているが、
-//! 公開 API 境界 (`exec_line` など) では [`BasicError`] を `Result` で返す。
-//!
-//! コード番号 ⇔ 列挙子 ⇔ メッセージ文言の対応は [`ERROR_TABLE`] を唯一の
-//! 真実とし、他のメソッドは全てこれを参照する。
+//! メッセージ文言は `Display` で出力する (thiserror が生成)。
+//! 数値コードは IchigoJam 標準と互換 (1..=12)。
 
-use std::fmt;
+use thiserror::Error;
 
 /// BASIC 実行時エラー。`Break` は ESC キーによる中断。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BasicError {
+    #[error("Syntax error")]
     SyntaxError,
+    #[error("Out of memory")]
     OutOfMemory,
+    #[error("Stack overflow")]
     StackOverflow,
+    #[error("Not match")]
     NotMatch,
+    #[error("Line error")]
     UndefinedLine,
+    #[error("Divide by 0")]
     DivideByZero,
+    #[error("Index out of range")]
     IndexOutOfRange,
+    #[error("File error")]
     FileError,
+    #[error("Segmentation Fault")]
     SegmentationFault,
+    #[error("Complex expression")]
     ComplexExpression,
+    #[error("Illegal argument")]
     IllegalArgument,
+    #[error("Break")]
     Break,
 }
-
-/// `(コード番号, 列挙子, IchigoJam 標準メッセージ)` の対応表。
-/// インデックス 0 は「エラー無し」を示すダミー (空文字列)。
-const ERROR_TABLE: &[(u8, Option<BasicError>, &str)] = &[
-    (0, None, ""),
-    (1, Some(BasicError::SyntaxError), "Syntax error"),
-    (2, Some(BasicError::OutOfMemory), "Out of memory"),
-    (3, Some(BasicError::StackOverflow), "Stack overflow"),
-    (4, Some(BasicError::NotMatch), "Not match"),
-    (5, Some(BasicError::UndefinedLine), "Line error"),
-    (6, Some(BasicError::DivideByZero), "Divide by 0"),
-    (7, Some(BasicError::IndexOutOfRange), "Index out of range"),
-    (8, Some(BasicError::FileError), "File error"),
-    (9, Some(BasicError::SegmentationFault), "Segmentation Fault"),
-    (10, Some(BasicError::ComplexExpression), "Complex expression"),
-    (11, Some(BasicError::IllegalArgument), "Illegal argument"),
-    (12, Some(BasicError::Break), "Break"),
-];
 
 impl BasicError {
     /// IchigoJam 標準の番号 (1..=12)。`Machine.err` の値と対応。
     pub const fn code(self) -> u8 {
-        // const 文脈で iter を使えないため線形検索を手で展開
-        let mut i = 1;
-        while i < ERROR_TABLE.len() {
-            if let (n, Some(e), _) = ERROR_TABLE[i] {
-                if matches_variant(e, self) {
-                    return n;
-                }
-            }
-            i += 1;
+        match self {
+            Self::SyntaxError => 1,
+            Self::OutOfMemory => 2,
+            Self::StackOverflow => 3,
+            Self::NotMatch => 4,
+            Self::UndefinedLine => 5,
+            Self::DivideByZero => 6,
+            Self::IndexOutOfRange => 7,
+            Self::FileError => 8,
+            Self::SegmentationFault => 9,
+            Self::ComplexExpression => 10,
+            Self::IllegalArgument => 11,
+            Self::Break => 12,
         }
-        0
     }
 
     /// 数値コードからエラーへ復元。`0` なら `None` (エラー無し)。
     pub const fn from_code(code: u8) -> Option<Self> {
-        let mut i = 1;
-        while i < ERROR_TABLE.len() {
-            let (n, e, _) = ERROR_TABLE[i];
-            if n == code {
-                return e;
-            }
-            i += 1;
+        match code {
+            1 => Some(Self::SyntaxError),
+            2 => Some(Self::OutOfMemory),
+            3 => Some(Self::StackOverflow),
+            4 => Some(Self::NotMatch),
+            5 => Some(Self::UndefinedLine),
+            6 => Some(Self::DivideByZero),
+            7 => Some(Self::IndexOutOfRange),
+            8 => Some(Self::FileError),
+            9 => Some(Self::SegmentationFault),
+            10 => Some(Self::ComplexExpression),
+            11 => Some(Self::IllegalArgument),
+            12 => Some(Self::Break),
+            _ => None,
         }
-        None
-    }
-
-    /// IchigoJam 標準のメッセージ文言。
-    pub const fn message(self) -> &'static str {
-        message_for_code(self.code())
     }
 }
 
-/// `Machine.err` (= 数値コード) からメッセージ文言を引く。
-/// 範囲外の数値は空文字列を返す (実機準拠)。
-pub(crate) const fn message_for_code(code: u8) -> &'static str {
-    let mut i = 0;
-    while i < ERROR_TABLE.len() {
-        let (n, _, msg) = ERROR_TABLE[i];
-        if n == code {
-            return msg;
-        }
-        i += 1;
-    }
-    ""
-}
-
-/// const 関数で `BasicError` 同士を比較するためのヘルパ
-/// (列挙型に `Eq` を `derive` していても `==` は const 不可)。
-const fn matches_variant(a: BasicError, b: BasicError) -> bool {
-    a as u8 == b as u8
-}
-
-impl fmt::Display for BasicError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.message())
-    }
-}
-
-impl std::error::Error for BasicError {}
-
-// ============================================================
-// 内部実装が使うエラー伝搬の道具立て
-// ============================================================
-
-/// インタプリタ内部のエラー伝搬に使う `Result` 別名。各 `command_*` /
-/// `token_*` はこれを返し、`?` 演算子でそのまま呼出元へ伝搬する。
-/// 表示は最上位 ([`crate::machine::Machine::basic_step`]) に集約する。
+/// 内部エラー伝搬用の `Result` 別名。各 `command_*` / `token_*` は `?` で
+/// 上位 (`Machine::basic_step`) まで返し、表示はそこに集約する。
 pub(crate) type BResult<T> = Result<T, BasicError>;
 
-// エラー値は数値コードではなく型付きの [`BasicError`] 定数として持つ。
-// 既存の呼出箇所が参照する短縮名を維持するための別名。
 pub(crate) const ERR_SYNTAX_ERROR: BasicError = BasicError::SyntaxError;
 pub(crate) const ERR_OUT_OF_MEMORY: BasicError = BasicError::OutOfMemory;
 pub(crate) const ERR_STACK_OVERFLOW: BasicError = BasicError::StackOverflow;

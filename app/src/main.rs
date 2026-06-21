@@ -5,10 +5,9 @@
 //! - PSG の現在周波数を矩形波として cpal で再生
 
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
+
+use atomic_float::AtomicF32;
 use std::time::{Duration, Instant};
 
 /// IchigoJam の論理 1 フレーム = 1/60 秒
@@ -76,7 +75,7 @@ fn main() -> eframe::Result<()> {
         filter_macos_stderr();
     }
 
-    let shared_tone = Arc::new(AtomicU32::new(0));
+    let shared_tone = Arc::new(AtomicF32::new(0.0));
     let _audio = match start_audio(shared_tone.clone()) {
         Ok(s) => Some(s),
         Err(e) => {
@@ -109,37 +108,25 @@ fn main() -> eframe::Result<()> {
 #[cfg(target_os = "macos")]
 fn filter_macos_stderr() {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::AsRawFd;
 
-    let real_stderr_fd = unsafe { libc::dup(libc::STDERR_FILENO) };
-    if real_stderr_fd < 0 {
+    // 真の stderr 書込みハンドルを保存 (fd 2 はパイプ側に張替える)
+    let Ok(mut real_stderr) = os_pipe::dup_stderr() else { return };
+    let Ok((reader, writer)) = os_pipe::pipe() else { return };
+    // fd 2 (stderr) をパイプの書き込み側に置換。アトミックな置換 API は
+    // std/os_pipe には無いためここだけ libc を呼ぶ。
+    if unsafe { libc::dup2(writer.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
         return;
     }
-    let real_stderr = unsafe { OwnedFd::from_raw_fd(real_stderr_fd) };
-
-    // stderr をパイプの書き込み側に張替える
-    let mut fds = [0i32; 2];
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } < 0 {
-        return;
-    }
-    let read_fd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    let write_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-    if unsafe { libc::dup2(write_fd.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
-        return;
-    }
-    drop(write_fd); // STDERR_FILENO に複製済み
+    drop(writer);
 
     std::thread::spawn(move || {
-        let reader = BufReader::new(std::fs::File::from(read_fd));
-        let mut out = std::fs::File::from(real_stderr);
-        for line in reader.lines().map_while(|r| r.ok()) {
+        for line in BufReader::new(reader).lines().map_while(Result::ok) {
             // 既知の無害な macOS IMK ログをスキップ
-            if line.contains("IMKCFRunLoopWakeUpReliable")
-                || line.contains("IMK")
-            {
+            if line.contains("IMK") {
                 continue;
             }
-            let _ = writeln!(out, "{line}");
+            let _ = writeln!(real_stderr, "{line}");
         }
     });
 }
@@ -201,7 +188,7 @@ struct IchigoApp {
     renderer: Renderer,
     /// Machine.program_running と同期するホスト側のミラー
     running: bool,
-    shared_tone: Arc<AtomicU32>,
+    shared_tone: Arc<AtomicF32>,
     _audio_stream: Option<cpal::Stream>,
     /// カーソル点滅の基準
     start_time: Instant,
@@ -216,7 +203,7 @@ struct IchigoApp {
 impl IchigoApp {
     fn new(
         _cc: &CreationContext<'_>,
-        shared_tone: Arc<AtomicU32>,
+        shared_tone: Arc<AtomicF32>,
         audio_stream: Option<cpal::Stream>,
     ) -> Self {
         let mut machine = Machine::new();
@@ -323,7 +310,7 @@ impl App for IchigoApp {
         }
 
         self.shared_tone
-            .store(self.machine.current_tone_hz.to_bits(), Ordering::Relaxed);
+            .store(self.machine.current_tone_hz, Ordering::Relaxed);
 
         // 再描画頻度をマシンの状態で決める。プログラム実行中・発音中・WAIT
         // 待機中は時間進行が必要なので 60Hz、それ以外の REPL 待機中はカーソル
@@ -777,7 +764,7 @@ fn char_to_basic(c: char) -> Option<u8> {
     Some(b)
 }
 
-fn start_audio(tone: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
+fn start_audio(tone: Arc<AtomicF32>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -792,7 +779,7 @@ fn start_audio(tone: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
             .build_output_stream(
                 &config.into(),
                 move |data: &mut [f32], _| {
-                    let hz = f32::from_bits(tone.load(Ordering::Relaxed));
+                    let hz = tone.load(Ordering::Relaxed);
                     let amp = 0.15f32;
                     for frame in data.chunks_mut(channels) {
                         let v = if hz <= 0.0 {

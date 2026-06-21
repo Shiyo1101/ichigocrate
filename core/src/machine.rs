@@ -376,12 +376,7 @@ impl Machine {
         if self.cursory == -1 {
             self.cursory = 0;
         }
-        let msg = e.message();
-        if !msg.is_empty() {
-            // borrow チェッカ回避のため一旦 String 化
-            let s = msg.to_string();
-            self.put_str(&s);
-        }
+        self.put_str(&e.to_string());
 
         if self.pc_in_list() {
             let mut index: u16 = 0;
@@ -452,18 +447,9 @@ impl Machine {
     /// 10 進表示時の文字数 (符号 `-` を含む)。例: `beam(-42)` → 3。
     /// PRINT DEC$ の桁数調整に使う。
     pub fn beam(n: i32) -> u32 {
-        let mut res: u32 = 1;
-        let mut n = n;
-        if n < 0 {
-            res += 1;
-            n = -n;
-        }
-        let mut chk: i32 = 10;
-        while n >= chk {
-            res += 1;
-            chk *= 10;
-        }
-        res
+        let sign = u32::from(n < 0);
+        let digits = n.unsigned_abs().checked_ilog10().unwrap_or(0) + 1;
+        sign + digits
     }
 
     pub fn put_strmem(&mut self, n: i32, mut m: i16) {
@@ -608,7 +594,7 @@ impl Machine {
         let out = crate::romajikana::romajikana_input(&mut buf0, &mut buf1, c);
         self.key_kana_buf_0 = buf0;
         self.key_kana_buf_1 = buf1;
-        for b in &out {
+        for &b in &out {
             self.screen_putc(b);
         }
     }
@@ -630,25 +616,14 @@ pub fn strlen8(ram: &[u8], start: usize) -> usize {
     i - start
 }
 
-/// IchigoJam の calcDiv: 切り捨て除算 (符号付き、ゼロ除算は呼ばない前提)
+/// IchigoJam の `calcDiv`: 切り捨て除算 (符号付き)。Rust 標準の `/` と同じ
+/// 動作。呼出元がゼロ除算を防ぐ前提。
 #[inline]
 pub fn calc_div(n: i32, m: i32) -> i32 {
-    let mut flg = 1i32;
-    let mut n = n;
-    let mut m = m;
-    if n < 0 {
-        n = -n;
-        flg = -flg;
-    }
-    if m < 0 {
-        m = -m;
-        flg = -flg;
-    }
-    ((n as u32) / (m as u32)) as i32 * flg
+    n / m
 }
 
 #[inline]
 pub fn calc_mod(n: i32, m: i32) -> i32 {
-    let d = calc_div(n, m);
-    n - d * m
+    n % m
 }

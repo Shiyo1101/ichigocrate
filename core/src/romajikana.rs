@@ -5,41 +5,12 @@
 //!   差し替える動きも含めて再現する。
 //! - 入力の途中経過を 2 文字分 (`buf0`, `buf1`) だけ覚えておく。
 //! - 1 入力あたりの出力は最大 5 バイト (例: `DHA` → BS, BS, テ, ゛, ャ)。
-//!   ヒープ確保を避けるため固定サイズの [`KanaOutput`] を返す。
+//!   ヒープ確保を避けるため固定容量 6 の [`KanaOutput`] を返す。
 
-/// `romajikana_input` の出力。最大 5 バイトの半固定列。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct KanaOutput {
-    bytes: [u8; 6],
-    len: u8,
-}
+use arrayvec::ArrayVec;
 
-impl KanaOutput {
-    fn push(&mut self, b: u8) {
-        let i = self.len as usize;
-        debug_assert!(i < self.bytes.len(), "KanaOutput overflow");
-        self.bytes[i] = b;
-        self.len += 1;
-    }
-
-    /// 出力済みのスライスを返す。
-    pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len as usize]
-    }
-
-    /// 出力が空かどうか。
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-}
-
-impl<'a> IntoIterator for &'a KanaOutput {
-    type Item = u8;
-    type IntoIter = std::iter::Copied<std::slice::Iter<'a, u8>>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter().copied()
-    }
-}
+/// `romajikana_input` の出力。最大 6 バイトの固定容量バッファ。
+pub type KanaOutput = ArrayVec<u8, 6>;
 
 /// 1 文字目 `buf0` を覚えている状態で、次に来た英字 `k` を 2 文字目 `buf1`
 /// として覚えてよいかを判定する。
@@ -345,7 +316,7 @@ mod tests {
         let mut emitted: Vec<u8> = Vec::new();
         for c in s.bytes() {
             let r = romajikana_input(&mut buf0, &mut buf1, c);
-            for b in &r {
+            for &b in &r {
                 if b == 8 {
                     emitted.pop();
                 } else {
