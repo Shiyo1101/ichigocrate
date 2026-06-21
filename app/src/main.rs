@@ -197,20 +197,19 @@ impl Storage for DiskStorage {
 
 struct IchigoApp {
     machine: Machine,
-    /// VRAM → テクスチャ描画器 (バッファ使い回し + 変化時のみ再描画)
+    /// VRAM → テクスチャ描画器 (バッファ使い回し + 差分判定で再描画を抑える)
     renderer: Renderer,
-    /// 実行中フラグ (program_running)
+    /// Machine.program_running と同期するホスト側のミラー
     running: bool,
-    /// 音声共有
     shared_tone: Arc<AtomicU32>,
     _audio_stream: Option<cpal::Stream>,
-    /// 起動時刻 (カーソル点滅などの基準)
+    /// カーソル点滅の基準
     start_time: Instant,
     /// 次に 60Hz tick (PSG 等) を駆動する時刻
     next_tick_time: Instant,
-    /// WAIT 終了予定時刻 (実時間ベース)
+    /// 実時間ベースの WAIT 終了予定時刻
     wait_until: Option<Instant>,
-    /// 直前フレームのカナモード状態 (タイトル更新差分用)
+    /// タイトル更新差分用に持つ直前フレームのカナモード状態
     last_kana: bool,
 }
 
@@ -222,7 +221,6 @@ impl IchigoApp {
     ) -> Self {
         let mut machine = Machine::new();
         machine.set_storage(Box::new(DiskStorage::new()));
-        // タイトル表示
         for c in "IchigoJam BASIC 1.4 (Rust port)\n".bytes() {
             machine.put_chr(c);
         }
@@ -336,7 +334,6 @@ impl App for IchigoApp {
             self.running || self.machine.psg_sound() || self.wait_until.is_some();
         ctx.request_repaint_after(if needs_realtime { FRAME } else { IDLE_REPAINT });
 
-        // カナモードをウィンドウタイトルに反映
         if self.machine.key_kana != self.last_kana {
             let title = if self.machine.key_kana {
                 "IchigoJam BASIC (Rust port) — KANA"
@@ -671,7 +668,7 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
             }
         }
         // Enter は Text イベントにも KEY_CONTROL_MAP にも現れないため個別に。
-        // 非実行中は line 323 の REPL ハンドラが行確定に使う。
+        // 非実行中は execute_current_line で行確定に使うので keybuf には積まない。
         if executing && i.key_pressed(Key::Enter) {
             m.key_push(b'\n');
         }
@@ -708,7 +705,6 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         if !i.focused {
             m.key_clear_down();
         }
-        // BTN() 用の押下/解放状態を更新
         for ev in &i.events {
             if let egui::Event::Key { key, pressed, .. } = ev {
                 if let Some(code) = key_to_btn_code(*key) {

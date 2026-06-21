@@ -303,11 +303,10 @@ impl Machine {
             }
             _ => {
                 if c < 32 && c != 0 {
-                    // 制御コードは無視
                     return;
                 }
                 if !self.screen_insertmode {
-                    // 挿入モード
+                    // 挿入モード (screen_insertmode は元 C 由来で 0=挿入)
                     let mut now = self.cursory as usize * w + self.cursorx as usize;
                     let mut cxlast = now;
                     while cxlast < w * h && self.vram()[cxlast] != 0 {

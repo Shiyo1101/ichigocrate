@@ -13,11 +13,10 @@ pub const PC_NULL: usize = usize::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasicResult {
-    /// 停止 (エラーまたは Break)
     StopOrErr,
-    /// 正常終了 (`OK` 表示すべき場合)
+    /// 正常終了 (呼び出し側は `OK` を表示する)
     Execute,
-    /// 行編集 (行番号付き入力が行われた)
+    /// 行番号付き入力により LIST が編集された (`OK` は表示しない)
     Edit,
 }
 
@@ -74,24 +73,19 @@ pub struct Machine {
 
     // ---- 以下はクレート内専用 (`pub(crate)`) ----
 
-    /// 直前のトークン取得開始位置 (token_back 用)
+    /// `token_back` 用に直前のトークン取得開始位置を覚える
     pub(crate) lasttoken: usize,
-    /// 直前のトークン取得後の位置
     pub(crate) lasttokenpc: usize,
-    /// 直前のトークン
     pub(crate) bklasttoken: Token,
-    /// ブレーク時に保持される pc
     pub(crate) pcbreak: usize,
-    /// 直近の停止理由 (エラーまたは Break)。実行ループ ([`Machine::basic_step`])
-    /// が `Err` を捕捉して格納し、境界 (`exec_line`) が読み取る。`None` は無エラー。
+    /// 直近の停止理由。実行ループ ([`Machine::basic_step`]) が `Err` を捕捉して
+    /// 格納し、境界 (`exec_line`) が読み取る。
     pub(crate) last_error: Option<BasicError>,
-    /// GOSUB スタックの段数
     pub(crate) ngosubstack: u8,
-    /// FOR スタックの段数
     pub(crate) nforstack: u8,
     pub(crate) gosubstack: [usize; IJB_SIZEOF_GOSUB_STACK],
     pub(crate) forstack: [usize; IJB_SIZEOF_FOR_STACK],
-    /// トークンモード (0:コマンド 1:式)
+    /// 0:コマンド 1:式
     pub(crate) tokenmode: u8,
 
     pub(crate) screenw: usize,
@@ -100,11 +94,10 @@ pub struct Machine {
     pub(crate) screen_locatemode: u8,
 
     pub(crate) key_insert: bool,
-    /// ローマ字かな変換の未確定バッファ (1 文字目)
+    /// ローマ字かな変換の未確定バッファ (子音 1〜2 文字目)
     pub(crate) key_kana_buf_0: u8,
-    /// ローマ字かな変換の未確定バッファ (2 文字目)
     pub(crate) key_kana_buf_1: u8,
-    /// 押下キーバッファ (REPL/INPUT/INKEY 用)
+    /// INKEY() 用のキューイング入力バッファ
     pub(crate) keybuf: VecDeque<u8>,
     /// キーボードレイアウト ID (`KBD` コマンド / `VER(2)` 用)。
     /// 0 = US, 1 = JA。元 C 版 (IchigoJam_P/src/keyboard.h:21 の
@@ -372,7 +365,6 @@ impl Machine {
         self.pc = PC_NULL;
         self.pcbreak = PC_NULL;
         self.listsize = 0;
-        // PCG ロード (CHAR_PATTERN の末尾 32 文字をコピー)
         self.screen_clp();
     }
 
@@ -390,12 +382,11 @@ impl Machine {
         }
         let msg = e.message();
         if !msg.is_empty() {
-            // 借用衝突回避のためコピーしてから書き出す
+            // borrow チェッカ回避のため一旦 String 化
             let s = msg.to_string();
             self.put_str(&s);
         }
 
-        // 実行中の行番号を表示
         if self.pc_in_list() {
             let mut index: u16 = 0;
             loop {
@@ -425,7 +416,6 @@ impl Machine {
             }
         }
         self.put_chr(b'\n');
-        // psg_beep(10, 3) は省略 (エラー音はオプション)
     }
 
     // ---- 文字出力 ----
@@ -561,7 +551,6 @@ impl Machine {
         }
     }
 
-    /// ASCII コード `code` のキーが現在押下されているか。
     fn is_key_down(&self, code: u8) -> bool {
         self.keys_down[code as usize]
     }

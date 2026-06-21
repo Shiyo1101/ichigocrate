@@ -682,7 +682,7 @@ impl Machine {
     /// ```
     pub(super) fn command_draw(&mut self) -> BResult<()> {
         let mut args = [0i32; 5];
-        let mut count = 0usize; // 読み取った引数の個数
+        let mut count = 0usize;
         while count < args.len() {
             args[count] = self.token_expression()? as i32;
             count += 1;
