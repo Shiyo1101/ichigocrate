@@ -4,6 +4,8 @@
 //! - キーボード入力を IchigoJam の制御コードに変換してマシンに渡す
 //! - PSG の現在周波数を矩形波として cpal で再生
 
+#![deny(unsafe_code)]
+
 use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Arc};
 
@@ -23,7 +25,7 @@ use eframe::{egui, App, CreationContext};
 use egui::{Color32, ColorImage, Key, TextureHandle, TextureOptions, Vec2};
 
 use ichigojam_core::{
-    exec_line, keycodes as kc,
+    exec_line_bytes, keycodes as kc,
     machine::{BasicResult, Storage, PC_NULL},
     LineOutcome, Machine, OFFSET_RAM_VRAM, SCREEN_H, SCREEN_W, SIZE_RAM_VRAM,
 };
@@ -67,13 +69,7 @@ fn main() -> eframe::Result<()> {
     // "error messaging the mach port for IMKCFRunLoopWakeUpReliable"
     // を抑制する (cpal/winit と macOS Sequoia の組合せで発生する無害なログ)
     #[cfg(target_os = "macos")]
-    {
-        // SAFETY: シングルスレッドの起動初期で他スレッドは未生成
-        unsafe {
-            std::env::set_var("OS_ACTIVITY_MODE", "disable");
-        }
-        filter_macos_stderr();
-    }
+    filter_macos_stderr();
 
     let shared_tone = Arc::new(AtomicF32::new(0.0));
     let _audio = match start_audio(shared_tone.clone()) {
@@ -108,14 +104,11 @@ fn main() -> eframe::Result<()> {
 #[cfg(target_os = "macos")]
 fn filter_macos_stderr() {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::fd::AsRawFd;
 
     // 真の stderr 書込みハンドルを保存 (fd 2 はパイプ側に張替える)
     let Ok(mut real_stderr) = os_pipe::dup_stderr() else { return };
     let Ok((reader, writer)) = os_pipe::pipe() else { return };
-    // fd 2 (stderr) をパイプの書き込み側に置換。アトミックな置換 API は
-    // std/os_pipe には無いためここだけ libc を呼ぶ。
-    if unsafe { libc::dup2(writer.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
+    if rustix::stdio::dup2_stderr(&writer).is_err() {
         return;
     }
     drop(writer);
@@ -406,21 +399,21 @@ impl IchigoApp {
         // ENTER 押下時の改行を VRAM へ書き込む (実機準拠)
         self.machine.screen_putc(b'\n');
         let p = self.machine.screen_gets();
-        let mut line = String::new();
-        let mut q = p;
-        while q < OFFSET_RAM_VRAM + SIZE_RAM_VRAM {
-            let c = self.machine.ram[q];
-            if c == 0 {
-                break;
-            }
-            line.push(c as char);
-            q += 1;
-        }
-        if line.is_empty() {
+        // VRAM から行の長さを測り、生バイト列のスライスを取得する。String 経由
+        // (`c as char` → `as_bytes()`) は 0x80-0xFF のグラフィック文字を UTF-8
+        // で 2 バイトに展開してしまうため使えない。
+        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
+        let len = self.machine.ram[p..vram_end]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(vram_end - p);
+        if len == 0 {
             return;
         }
         self.machine.key_flg_esc = 0;
-        match exec_line(&mut self.machine, &line) {
+        // Machine 借用のため一旦スライスをローカルにコピー
+        let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
+        match exec_line_bytes(&mut self.machine, &line) {
             Ok(LineOutcome::Executed) => {
                 if self.machine.pc != PC_NULL {
                     // RUN 後など継続実行が必要
