@@ -17,4 +17,4 @@ atomic_float = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 os_pipe = "1"
-libc = "0.2"
+rustix = { version = "1", features = ["stdio"] }
