@@ -556,7 +556,7 @@ impl Machine {
         Ok(())
     }
 
-    /// VIDEO n[,clkdiv] — 映像モード切替 (元 C の command_video を移植)。
+    /// VIDEO n[,clkdiv] — 映像モード切替。
     ///
     /// ```text
     /// VIDEO 0 - 表示オフ
@@ -658,12 +658,10 @@ impl Machine {
         Ok(())
     }
 
-    /// `KBD n` (Ver1.5 〜): キーボードレイアウトを切り替える。
-    /// 元 C 版 (IchigoJam_P/src/keyboard.h:34 `IJB_kbd`) は `mode = !!mode`
-    /// として 0 / 1 に正規化し、フラッシュへ永続化したうえで `keycode2ascii`
-    /// を US/JA いずれかへ差し替える。本移植は OS から論理キーで受け取るため
-    /// テーブル差し替えは不要で、`keyboard_id` を 0/1 で保持し VER(2) に反映
-    /// するのみ。永続化はメモリ内で完結する。
+    /// `KBD n` (Ver1.5 〜): キーボードレイアウトを切り替える。`!!n` で 0/1
+    /// に正規化。実機は `keycode2ascii` 差し替え + フラッシュ永続化だが、
+    /// 本移植は OS から論理キーで受け取るため `keyboard_id` を保持して
+    /// `VER(2)` に反映するだけ (永続化はメモリ内のみ)。
     pub(super) fn command_kbd(&mut self) -> BResult<()> {
         let n = self.token_expression()?;
         self.token_end()?;

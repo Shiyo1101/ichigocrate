@@ -54,9 +54,9 @@ impl Machine {
         self.screenh
     }
 
-    /// VIDEO オン処理 (元 C IchigoJam_P の `video_on`)。拡大段階に合わせて
-    /// 論理画面サイズを `SCREEN_W/H >> screen_big` に再設定する。これにより
-    /// 折り返し位置・カーソル可動範囲が拡大倍率へ追従する。
+    /// VIDEO オン処理。拡大段階に合わせて論理画面サイズを
+    /// `SCREEN_W/H >> screen_big` に再設定する。これにより折り返し位置・
+    /// カーソル可動範囲が拡大倍率へ追従する。
     pub fn video_on(&mut self) {
         self.video_enabled = true;
         self.screenw = SCREEN_W >> self.screen_big as u32;
@@ -155,11 +155,10 @@ impl Machine {
         self.cursorx = 0;
     }
 
-    /// UP/DOWN でカーソルを縦移動した後、テキストエディタのように
-    /// 入力済み領域の末尾へカーソルを引き戻す (元 C の UP/DOWN 処理に倣う)。
-    /// 挿入モードでカーソル先が空白セルのとき、左隣が空でなくなる位置
-    /// (= テキスト末尾) まで、なければ 0 列まで戻す。上書きモードでは
-    /// 実機同様に自由移動とし、何もしない。
+    /// UP/DOWN でカーソルを縦移動した後、テキストエディタのように入力済み
+    /// 領域の末尾へカーソルを引き戻す。挿入モードでカーソル先が空白セルの
+    /// とき、左隣が空でなくなる位置 (= テキスト末尾) まで、なければ 0 列まで
+    /// 戻す。上書きモードは実機同様に自由移動とし、何もしない。
     fn cursor_snap_to_text(&mut self) {
         if self.screen_insertmode {
             return; // 上書きモードは自由移動 (実機準拠)
@@ -306,7 +305,7 @@ impl Machine {
                     return;
                 }
                 if !self.screen_insertmode {
-                    // 挿入モード (screen_insertmode は元 C 由来で 0=挿入)
+                    // 挿入モード (screen_insertmode は移植元の流儀で 0=挿入)
                     let mut now = self.cursory as usize * w + self.cursorx as usize;
                     let mut cxlast = now;
                     while cxlast < w * h && self.vram()[cxlast] != 0 {
@@ -361,7 +360,8 @@ impl Machine {
             return OFFSET_RAM_VRAM;
         }
         let mut p = p as usize;
-        // 元 C: ((!*p) && *(p-1)) なら p -= SCREEN_W
+        // 上行末尾が直前行のテキスト末尾になるよう 1 行戻す
+        // (空白セルの直前に文字が来ている場合のみ)
         let v = self.vram();
         if v[p] == 0 && p > 0 && v[p - 1] != 0 {
             p = p.saturating_sub(w);

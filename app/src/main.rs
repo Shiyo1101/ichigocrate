@@ -394,8 +394,7 @@ impl IchigoApp {
     /// `program_running` を立てることで `input_putc`/`input_control` が実行中の
     /// 対話編集を無視する。判定に `pc` を使えないのが要点で、`pc` は STOP/ESC
     /// ブレーク後も CONT 用に残るため、停止しても入力が復活しなくなってしまう。
-    /// 非実行 (REPL) 中は挿入/上書きモードを同期しカーソルを表示する
-    /// (元 C 版 REPL の `screen_showCursor(1)` 相当)。
+    /// 非実行 (REPL) 中は挿入/上書きモードを同期しカーソルを表示する。
     fn sync_machine_before_input(&mut self) {
         self.machine.program_running = self.running;
         if !self.running {
@@ -417,7 +416,7 @@ impl IchigoApp {
     }
 
     fn execute_current_line(&mut self) {
-        // 元 C と同様、ENTER 押下時に改行を VRAM へ書き込む
+        // ENTER 押下時の改行を VRAM へ書き込む (実機準拠)
         self.machine.screen_putc(b'\n');
         let p = self.machine.screen_gets();
         let mut line = String::new();
@@ -596,7 +595,7 @@ fn render_into(pixels: &mut [Color32], machine: &Machine, s: &Scalars) {
                         on = !on;
                     }
                     // カーソル反転。挿入モードは左半分 (col < 4) のみ反転して
-                    // 細いカーソルにする (元 C の 0xf0 マスク相当)。
+                    // 細いカーソルにする (実機準拠)。
                     if cursor_here && (cursor_full || col < FONT_W / 2) {
                         on = !on;
                     }
@@ -623,13 +622,11 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         if i.key_pressed(Key::F10) {
             m.toggle_kana();
         }
-        // 元 C 版はキーバッファ (keybuf) が単一で、REPL 行編集 (IJB_input) も
-        // INKEY() も同じ key_getKey() から読む。本移植は行編集を
-        // input_putc/input_control が直接担うため、keybuf は INKEY() 専用に
-        // なっている。よって全打鍵を keybuf にも流す必要があるが、REPL 編集
-        // 中に積むと直接モードの INKEY() が編集文字を拾ってしまう (C 版は
-        // 行エディタが keybuf を消費し実行開始時には空)。そこで実行中のみ
-        // 積む。RUN は開始時に key_clear_key するのでこれで C と同じ挙動。
+        // 実機は keybuf を REPL 行編集と INKEY() で共有するが、本移植は
+        // 行編集を input_putc/input_control が直接担うため keybuf は INKEY()
+        // 専用。よって全打鍵を keybuf にも流したいが、REPL 編集中に積むと
+        // 直接モードの INKEY() が編集文字を拾ってしまうので、実行中のみ積む。
+        // RUN は開始時に key_clear_key するのでこれで実機と同じ挙動になる。
         let executing = m.is_executing();
         // Alt(Windows) / Option(Mac) を押している間は IchigoJam のグラフィック
         // 文字 (128-255) 入力モード。OS が合成する特殊文字 (例: mac の
@@ -742,8 +739,8 @@ fn key_to_btn_code(k: Key) -> Option<u8> {
 }
 
 /// Alt(Option) + 英字/数字キーを IchigoJam のグラフィック文字 (128-255) へ
-/// 変換する。実機キーボードドライバ (IchigoJam_P/src/hid.h の keycode_to_ascii
-/// テーブル) の Alt / Alt+Shift 列を再現する。この対応は US/JA 配列とも共通。
+/// 変換する。実機の HID キーボードドライバの Alt / Alt+Shift 列を再現する
+/// (US/JA 配列とも共通)。
 ///
 /// - 英字 a-z: `224 + ((10 + (c - 'A')) % 32)` (a→234 … v→255, w→224 … z→227)
 /// - 数字 0-9: `224 + d`                       (0→224, 1→225 … 9→233)
@@ -832,7 +829,7 @@ fn start_audio(tone: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
 mod tests {
     use super::*;
 
-    /// Alt + 英字/数字が実機テーブル (IchigoJam_P/src/hid.h) と一致すること。
+    /// Alt + 英字/数字が実機キーボードドライバの変換テーブルと一致すること。
     #[test]
     fn alt_graphic_letters_match_firmware_table() {
         // a→234 … v→255, w→224 … z→227

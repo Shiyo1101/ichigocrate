@@ -1,11 +1,10 @@
-//! BASIC エラー (元 C 実装 `error.h` を Rust の列挙型に置換)。
+//! BASIC エラーを Rust 列挙型として表現する。
 //!
 //! 内部処理は依然として `Machine.err: u8` のフラグを伝搬させているが、
-//! 公開 API 境界 (`exec_line` など) では [`BasicError`] を `Result` で
-//! 返す。
+//! 公開 API 境界 (`exec_line` など) では [`BasicError`] を `Result` で返す。
 //!
-//! コード番号 ⇔ 列挙子 ⇔ メッセージ文言の対応は [`ERROR_TABLE`] を唯一
-//! の真実とし、他のメソッドは全てこれを参照する。
+//! コード番号 ⇔ 列挙子 ⇔ メッセージ文言の対応は [`ERROR_TABLE`] を唯一の
+//! 真実とし、他のメソッドは全てこれを参照する。
 
 use std::fmt;
 
@@ -46,7 +45,7 @@ const ERROR_TABLE: &[(u8, Option<BasicError>, &str)] = &[
 ];
 
 impl BasicError {
-    /// 元 C 実装と同じ番号 (1..=12)。`Machine.err` の値と対応。
+    /// IchigoJam 標準の番号 (1..=12)。`Machine.err` の値と対応。
     pub const fn code(self) -> u8 {
         // const 文脈で iter を使えないため線形検索を手で展開
         let mut i = 1;
@@ -61,7 +60,7 @@ impl BasicError {
         0
     }
 
-    /// 元 C 実装の番号からエラーへ復元。`0` なら `None` (エラー無し)。
+    /// 数値コードからエラーへ復元。`0` なら `None` (エラー無し)。
     pub const fn from_code(code: u8) -> Option<Self> {
         let mut i = 1;
         while i < ERROR_TABLE.len() {
@@ -81,7 +80,7 @@ impl BasicError {
 }
 
 /// `Machine.err` (= 数値コード) からメッセージ文言を引く。
-/// 範囲外の数値は空文字列を返す (元 C 実装と同じ挙動)。
+/// 範囲外の数値は空文字列を返す (実機準拠)。
 pub(crate) const fn message_for_code(code: u8) -> &'static str {
     let mut i = 0;
     while i < ERROR_TABLE.len() {

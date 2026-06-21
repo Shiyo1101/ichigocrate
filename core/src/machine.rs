@@ -1,7 +1,7 @@
 //! IchigoJam 仮想マシンの中核状態。
 //!
-//! IchigoJam の元 C 実装はグローバル変数の集合だが、本移植では `Machine`
-//! 構造体に集約し、`&mut self` 経由で操作する。
+//! 元実装はグローバル変数の集合だが、本移植では `Machine` 構造体に集約し
+//! `&mut self` 経由で操作する。
 
 use std::collections::VecDeque;
 
@@ -30,9 +30,8 @@ pub struct Token {
 ///
 /// 公開フィールドはホスト (UI / テスト) が直接参照する必要のあるものだけ。
 /// それ以外はクレート内専用 (`pub(crate)`) で、外部からはアクセサ経由で
-/// 触る。元 C 実装の `_g` 構造体を素朴に移植した名残で getter を介さず
-/// 直アクセスしているフィールドが多いため、内部用にはまだ全部 `pub(crate)`
-/// で公開している。
+/// 触る。移植元の名残で getter を介さず直アクセスしているフィールドが
+/// 多いため、内部用にはまだ全部 `pub(crate)` で公開している。
 #[derive(Debug)]
 pub struct Machine {
     /// 統合 RAM (PCG/VAR/VRAM/LIST/KEYBUF/LINEBUF/I2CBUF)
@@ -48,7 +47,7 @@ pub struct Machine {
     pub cursorflg: bool,
     pub screen_invert: bool,
     /// 拡大表示の段階 (VIDEO 3/4 で 1 以上)。表示倍率は `1 << screen_big`。
-    /// 0 = 等倍, 1 = 2 倍, 2 = 4 倍, 3 = 8 倍 (元 C は最大 3 でクリップ)。
+    /// 0 = 等倍, 1 = 2 倍, 2 = 4 倍, 3 = 8 倍 (最大 3 でクリップ)。
     pub screen_big: u8,
     /// 映像出力の有効/無効 (VIDEO 0 でオフ)。ホストはオフ時に黒画面を描画する。
     pub video_enabled: bool,
@@ -100,9 +99,8 @@ pub struct Machine {
     /// INKEY() 用のキューイング入力バッファ
     pub(crate) keybuf: VecDeque<u8>,
     /// キーボードレイアウト ID (`KBD` コマンド / `VER(2)` 用)。
-    /// 0 = US, 1 = JA。元 C 版 (IchigoJam_P/src/keyboard.h:21 の
-    /// `key_getKeyboardID`) と同じ規約で、`KBD n` は `!!n` で正規化される。
-    /// 実機はフラッシュへ永続化されるが、本移植はメモリ内のみ。
+    /// 0 = US, 1 = JA。`KBD n` は `!!n` で正規化される。実機はフラッシュへ
+    /// 永続化するが本移植はメモリ内のみ。
     pub(crate) keyboard_id: u8,
     /// 現在押下中のキー (BTN() 用)。ASCII コードで索引する押下フラグ。
     /// ホストがキー押下/解放ごとに [`Machine::key_set_down`] で更新する。
@@ -186,8 +184,7 @@ impl Machine {
             screen_big: 0,
             video_enabled: true,
 
-            // 既定は挿入モード (元 C 1.0.2b2 で key_flg.insert は 1→0 へ変更され、
-            // insert:0=挿入 / 1=上書き。screen.h:162 のコメント参照)。
+            // key_insert は 0=挿入 / 1=上書き (移植元の流儀をそのまま使う)
             key_insert: false,
             key_kana: false,
             key_kana_buf_0: 0,
@@ -370,9 +367,8 @@ impl Machine {
 
     // ---- エラー ----
 
-    /// 停止理由 `e` を画面に表示する (元 C の `basic_print_error` 相当)。
-    /// 実行ループが `Err` を捕捉した時点で 1 度だけ呼ぶ。`noresmode` 中は
-    /// 何も表示しない。
+    /// 停止理由 `e` を画面に表示する。実行ループが `Err` を捕捉した時点で
+    /// 1 度だけ呼ぶ。`noresmode` 中は何も表示しない。
     pub fn basic_print_error(&mut self, e: BasicError) {
         if self.noresmode {
             return;
@@ -565,18 +561,15 @@ impl Machine {
     }
 
     /// 対話編集 (REPL) の各キー処理前に呼ぶ。挿入/上書きモードをユーザの
-    /// トグル状態 `key_insert` に同期する (元 C 版 REPL ループの
-    /// `_g.screen_insertmode = key_flg.insert` 相当)。`key_insert` が false
-    /// なら挿入、true なら上書き。プログラム実行中の出力は basic_execute が
-    /// 上書きへ固定するので、ホストは実行中はこれを呼ばないこと。
+    /// トグル状態 `key_insert` (false=挿入, true=上書き) に同期する。
+    /// プログラム実行中の出力は basic_execute が上書きへ固定するので、
+    /// ホストは実行中はこれを呼ばないこと。
     pub fn sync_insert_mode(&mut self) {
         self.screen_insertmode = self.key_insert;
     }
 
     /// カーソル描画幅。上書きモードは文字全体 (8px) を反転、挿入モードは
-    /// 左半分 (4px) のみ反転する (元 C のカーソル描画
-    /// `char_line ^= key_flg.insert ? 0xff : 0xf0` に対応)。
-    /// true で全幅、false で左半分。
+    /// 左半分 (4px) のみ反転する (実機準拠)。true で全幅、false で左半分。
     pub fn cursor_full_width(&self) -> bool {
         self.screen_insertmode
     }
@@ -589,8 +582,7 @@ impl Machine {
     }
 
     /// 対話編集用の制御コード入力 (矢印・BS・DEL・Home/End 等)。
-    /// プログラム実行中はカーソル移動・画面編集を行わず無視する
-    /// (元 C 版が実行中はキー入力を画面エディタへ流さないのに倣う)。
+    /// プログラム実行中はカーソル移動・画面編集を行わず無視する (実機準拠)。
     /// 文字出力 (PRINT 等) は `put_chr`/`screen_putc` を直接使うため影響しない。
     pub fn input_control(&mut self, code: u8) {
         if self.is_executing() {
