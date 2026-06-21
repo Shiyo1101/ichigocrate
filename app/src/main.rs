@@ -634,15 +634,22 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         // 行エディタが keybuf を消費し実行開始時には空)。そこで実行中のみ
         // 積む。RUN は開始時に key_clear_key するのでこれで C と同じ挙動。
         let executing = m.is_executing();
-        for ev in &i.events {
-            if let egui::Event::Text(s) = ev {
-                for c in s.chars() {
-                    if let Some(b) = char_to_basic(c) {
-                        // カナモード中はローマ字 → 半角カナ変換を通す
-                        m.input_putc(b);
-                        // INKEY() 用: 英字・数字・記号・スペースを取りこぼさない
-                        if executing {
-                            m.key_push(b);
+        // Alt(Windows) / Option(Mac) を押している間は IchigoJam のグラフィック
+        // 文字 (128-255) 入力モード。OS が合成する特殊文字 (例: mac の
+        // Option+A = "å") を挿入しないよう、Alt 押下中は Text イベントを無視し、
+        // 代わりに後段の Key イベントからグラフィック文字を生成する。
+        let alt_held = i.modifiers.alt;
+        if !alt_held {
+            for ev in &i.events {
+                if let egui::Event::Text(s) = ev {
+                    for c in s.chars() {
+                        if let Some(b) = char_to_basic(c) {
+                            // カナモード中はローマ字 → 半角カナ変換を通す
+                            m.input_putc(b);
+                            // INKEY() 用: 英字・数字・記号・スペースを取りこぼさない
+                            if executing {
+                                m.key_push(b);
+                            }
                         }
                     }
                 }
@@ -667,6 +674,34 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         // 非実行中は line 323 の REPL ハンドラが行確定に使う。
         if executing && i.key_pressed(Key::Enter) {
             m.key_push(b'\n');
+        }
+        // Alt(Option) + 英字/数字 → IchigoJam グラフィック文字 (128-255)。
+        // 実行中は INKEY() 用キューへ、編集中は画面へ直接書く (グラフィック文字
+        // はローマ字ではないのでカナ変換 input_putc は通さず screen_putc を使う)。
+        for ev in &i.events {
+            if let egui::Event::Key {
+                key,
+                physical_key,
+                pressed: true,
+                modifiers,
+                ..
+            } = ev
+            {
+                if modifiers.alt {
+                    // 論理キーで引けないとき (mac で Option 合成により logical が
+                    // 非 Latin になる場合) は物理キー位置で引き直す。
+                    let g = alt_graphic_char(*key, modifiers.shift).or_else(|| {
+                        physical_key.and_then(|pk| alt_graphic_char(pk, modifiers.shift))
+                    });
+                    if let Some(g) = g {
+                        if executing {
+                            m.key_push(g);
+                        } else {
+                            m.screen_putc(g);
+                        }
+                    }
+                }
+            }
         }
         // ウィンドウがフォーカスを失っている間は解放イベントを取りこぼし、
         // BTN() のキーが押しっぱなしになるため、押下状態を一括クリアする。
@@ -708,6 +743,30 @@ fn key_to_btn_code(k: Key) -> Option<u8> {
             }
         }
     })
+}
+
+/// Alt(Option) + 英字/数字キーを IchigoJam のグラフィック文字 (128-255) へ
+/// 変換する。実機キーボードドライバ (IchigoJam_P/src/hid.h の keycode_to_ascii
+/// テーブル) の Alt / Alt+Shift 列を再現する。この対応は US/JA 配列とも共通。
+///
+/// - 英字 a-z: `224 + ((10 + (c - 'A')) % 32)` (a→234 … v→255, w→224 … z→227)
+/// - 数字 0-9: `224 + d`                       (0→224, 1→225 … 9→233)
+/// - Shift 併用時は上記から 96 を引く (128-159 の範囲)。
+///
+/// `k` は egui の論理キー。`Key::A`..=`Key::Z` の `name()` は "A".."Z"、
+/// `Key::Num0`..=`Key::Num9` は "0".."9" を返す。
+fn alt_graphic_char(k: Key, shift: bool) -> Option<u8> {
+    let bytes = k.name().as_bytes();
+    if bytes.len() != 1 {
+        return None;
+    }
+    let base: u16 = match bytes[0] {
+        c @ b'A'..=b'Z' => 224 + (10 + u16::from(c - b'A')) % 32,
+        c @ b'0'..=b'9' => 224 + u16::from(c - b'0'),
+        _ => return None,
+    };
+    let code = base as u8;
+    Some(if shift { code - 96 } else { code })
 }
 
 fn char_to_basic(c: char) -> Option<u8> {
@@ -771,4 +830,42 @@ fn start_audio(tone: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
     };
     stream.play().map_err(|e| e.to_string())?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Alt + 英字/数字が実機テーブル (IchigoJam_P/src/hid.h) と一致すること。
+    #[test]
+    fn alt_graphic_letters_match_firmware_table() {
+        // a→234 … v→255, w→224 … z→227
+        assert_eq!(alt_graphic_char(Key::A, false), Some(234));
+        assert_eq!(alt_graphic_char(Key::V, false), Some(255));
+        assert_eq!(alt_graphic_char(Key::W, false), Some(224));
+        assert_eq!(alt_graphic_char(Key::Z, false), Some(227));
+    }
+
+    #[test]
+    fn alt_graphic_digits_match_firmware_table() {
+        assert_eq!(alt_graphic_char(Key::Num0, false), Some(224));
+        assert_eq!(alt_graphic_char(Key::Num1, false), Some(225));
+        assert_eq!(alt_graphic_char(Key::Num9, false), Some(233));
+    }
+
+    #[test]
+    fn alt_shift_subtracts_96() {
+        // Alt+Shift は Alt から 96 を引いた符号 (128-159)
+        assert_eq!(alt_graphic_char(Key::A, true), Some(138));
+        assert_eq!(alt_graphic_char(Key::W, true), Some(128));
+        assert_eq!(alt_graphic_char(Key::Num0, true), Some(128));
+        assert_eq!(alt_graphic_char(Key::Num1, true), Some(129));
+    }
+
+    #[test]
+    fn non_alphanumeric_keys_have_no_graphic_char() {
+        assert_eq!(alt_graphic_char(Key::Space, false), None);
+        assert_eq!(alt_graphic_char(Key::Enter, false), None);
+        assert_eq!(alt_graphic_char(Key::ArrowLeft, false), None);
+    }
 }

@@ -106,6 +106,11 @@ pub struct Machine {
     pub(crate) key_kana_buf_1: u8,
     /// 押下キーバッファ (REPL/INPUT/INKEY 用)
     pub(crate) keybuf: VecDeque<u8>,
+    /// キーボードレイアウト ID (`KBD` コマンド / `VER(2)` 用)。
+    /// 0 = US, 1 = JA。元 C 版 (IchigoJam_P/src/keyboard.h:21 の
+    /// `key_getKeyboardID`) と同じ規約で、`KBD n` は `!!n` で正規化される。
+    /// 実機はフラッシュへ永続化されるが、本移植はメモリ内のみ。
+    pub(crate) keyboard_id: u8,
     /// 現在押下中のキー (BTN() 用)。ASCII コードで索引する押下フラグ。
     /// ホストがキー押下/解放ごとに [`Machine::key_set_down`] で更新する。
     pub(crate) keys_down: [bool; 256],
@@ -196,6 +201,7 @@ impl Machine {
             key_kana_buf_1: 0,
             key_flg_esc: 0,
             keybuf: VecDeque::with_capacity(128),
+            keyboard_id: 0,
             keys_down: [false; 256],
             program_running: false,
             noresmode: false,
@@ -512,6 +518,12 @@ impl Machine {
         if self.keybuf.len() < 126 {
             self.keybuf.push_back(c);
         }
+    }
+
+    /// 現在のキーボードレイアウト ID (0 = US, 1 = JA)。
+    /// `KBD` コマンドで切替えられ、`VER(2)` の戻り値と一致する。
+    pub fn keyboard_id(&self) -> u8 {
+        self.keyboard_id
     }
 
     /// BTN() 用にキーの押下/解放状態を記録する。`code` はキーに対応する

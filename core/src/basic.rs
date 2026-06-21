@@ -167,6 +167,7 @@ impl Machine {
             TOKEN_INPUT => self.command_input()?,
             TOKEN_CLV_1 | TOKEN_CLV_2 => self.command_clv()?,
             TOKEN_CLK => self.command_clk()?,
+            TOKEN_KBD => self.command_kbd()?,
             TOKEN_SRND => self.command_srnd()?,
             TOKEN_DRAW => self.command_draw()?,
             TOKEN_WAIT => self.command_wait()?,

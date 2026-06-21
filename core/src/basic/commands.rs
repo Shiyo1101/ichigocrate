@@ -658,6 +658,19 @@ impl Machine {
         Ok(())
     }
 
+    /// `KBD n` (Ver1.5 〜): キーボードレイアウトを切り替える。
+    /// 元 C 版 (IchigoJam_P/src/keyboard.h:34 `IJB_kbd`) は `mode = !!mode`
+    /// として 0 / 1 に正規化し、フラッシュへ永続化したうえで `keycode2ascii`
+    /// を US/JA いずれかへ差し替える。本移植は OS から論理キーで受け取るため
+    /// テーブル差し替えは不要で、`keyboard_id` を 0/1 で保持し VER(2) に反映
+    /// するのみ。永続化はメモリ内で完結する。
+    pub(super) fn command_kbd(&mut self) -> BResult<()> {
+        let n = self.token_expression()?;
+        self.token_end()?;
+        self.keyboard_id = if n == 0 { 0 } else { 1 };
+        Ok(())
+    }
+
     /// DRAW は 2〜5 個のカンマ区切り値を取り、その個数で点/線と既定 cmd を
     /// 決める。`cmd` は描画モード (0=消去, 1=描画, 2=反転)。
     ///

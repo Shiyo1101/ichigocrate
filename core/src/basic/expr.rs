@@ -204,7 +204,9 @@ impl Machine {
                     0 => (IJB_VER * 100 + IJB_BUILD) as i16,
                     3 => LANG_JP as i16,
                     4 => 60,
-                    2 => 0,
+                    // VER(2) はキーボードレイアウト ID (0=US, 1=JA)。
+                    // KBD コマンドで切替えた値を返す。
+                    2 => self.keyboard_id as i16,
                     _ => VER_PLATFORM_PC as i16,
                 })
             }
