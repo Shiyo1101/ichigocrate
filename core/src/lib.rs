@@ -4,6 +4,8 @@
 //! - バージョン: 1.4.3 ベース
 //! - 非対応: IoT 拡張、Morse 拡張、多言語フォント、FLASH 保存
 
+#![deny(unsafe_code)]
+
 pub mod basic;
 pub mod errors;
 pub mod font;
@@ -31,27 +33,37 @@ pub enum LineOutcome {
     Edited,
 }
 
-/// REPL: 入力された 1 行を実行する。
+/// REPL: 入力された 1 行を生バイト列として実行する。
 ///
-/// `line` は ASCII 文字列。RAM_LINEBUF にコピーした上で `basic_execute`
-/// を呼び出す。RUN や GOTO 等で実行が LIST 領域に移った場合は
+/// `line` は IchigoJam の文字コード (ASCII 0x00-0x7F + グラフィック文字
+/// 0x80-0xFF) のバイト列。RAM_LINEBUF にコピーした上で `basic_execute` を
+/// 呼び出す。RUN や GOTO 等で実行が LIST 領域に移った場合は
 /// `Ok(LineOutcome::Executed)` で即返るので、必要なら毎フレーム
 /// [`Machine::basic_step`] を呼び続ける。
-pub fn exec_line(machine: &mut Machine, line: &str) -> Result<LineOutcome, BasicError> {
-    let bytes = line.as_bytes();
+///
+/// VRAM から読んだ生バイトをそのまま渡せるよう `&[u8]` を受ける。Rust の
+/// `String` 経由 (`String::push(c as char)` → `as_bytes()`) は 0x80-0xFF を
+/// UTF-8 で展開してしまうため、グラフィック文字を含む行はこの API を使う。
+pub fn exec_line_bytes(machine: &mut Machine, line: &[u8]) -> Result<LineOutcome, BasicError> {
     let max = N_LINEBUF.saturating_sub(1);
-    let n = bytes.len().min(max);
-    for (i, &b) in bytes.iter().take(n).enumerate() {
-        machine.ram[OFFSET_RAM_LINEBUF + i] = b;
-    }
+    let n = line.len().min(max);
+    machine.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + n].copy_from_slice(&line[..n]);
     machine.ram[OFFSET_RAM_LINEBUF + n] = 0;
     match machine.basic_execute(OFFSET_RAM_LINEBUF) {
         BasicResult::Execute => Ok(LineOutcome::Executed),
         BasicResult::Edit => Ok(LineOutcome::Edited),
-        // 停止理由は basic_step が last_error に記録済み。記録が無いケースは
-        // 現状想定しないが、念のため Break として扱う。
         BasicResult::StopOrErr => Err(machine.last_error.unwrap_or(BasicError::Break)),
     }
+}
+
+/// REPL: 入力された 1 行を ASCII 文字列として実行する。
+///
+/// 内部で [`exec_line_bytes`] を呼ぶ薄いラッパ。`line` に非 ASCII 文字
+/// (`char as u32 >= 0x80`) を含めると `as_bytes()` が UTF-8 へ展開するため
+/// 0x80-0xFF のグラフィック文字は保持されない。生バイトを渡したいときは
+/// [`exec_line_bytes`] を使うこと。
+pub fn exec_line(machine: &mut Machine, line: &str) -> Result<LineOutcome, BasicError> {
+    exec_line_bytes(machine, line.as_bytes())
 }
 
 /// テスト/ヘッドレス用: プログラム実行を同期的に最後まで進める。
