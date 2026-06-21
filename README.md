@@ -1,11 +1,12 @@
 # ichigojam-rs
 
-IchigoJam BASIC (子供向け教育用コンピュータ) の C ファームウェアを Rust に
-書き換え、デスクトップ向け GUI アプリ化したもの。
+IchigoJam BASICの C ファームウェアを Rust に書き換え、デスクトップ向け GUI アプリ化したもの。
+
+> IchigoJam は [株式会社jig.jp](https://www.jig.jp/) の登録商標です。
 
 ## 構成
 
-```
+```worktree
 ichigojam-rs/
 ├── core/                 # no_std 可能な BASIC インタプリタ本体
 │   ├── src/
@@ -132,10 +133,12 @@ LIST 領域のバイナリを直接読み書きする。
 cargo test -p ichigojam-core
 ```
 
-- `tests/smoke.rs` (8 件): 単純な構文 (PRINT, FOR, IF/GOTO, CLS, LIST,
-  HEX/BIN, 変数, 行編集)
-- `tests/programs.rs` (6 件): GOSUB/RETURN、フィボナッチ、ネスト IF/ELSE、
-  WAIT+GOTO 協調的待機、SAVE/LOAD ラウンドトリップ、PEEK/POKE
+- `tests/smoke.rs` (45 件): 構文・REPL 編集・カーソル・カナ入力・BTN・
+  グラフィック文字 (128-255) のバイト保持・CHR$/HEX$/BIN$/DEC$ 境界・
+  POKE→VPEEK の全バイト範囲ラウンドトリップ など
+- `tests/programs.rs` (16 件): GOSUB/RETURN、フィボナッチ、ネスト IF/ELSE、
+  WAIT+GOTO 協調的待機、SAVE/LOAD ラウンドトリップ (グラフィック文字含む)、
+  LIST 表示でのバイト透過、DRAW の引数別経路、PEEK/POKE
 
 ## アーキテクチャ要点
 
