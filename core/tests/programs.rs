@@ -245,3 +245,59 @@ fn poke_peek_pcg() {
     assert!(t.contains("255"), "{t}");
     assert!(t.contains("170"), "{t}");
 }
+
+#[test]
+fn save_load_preserves_graphic_chars() {
+    // バグ報告: プログラム記述後 RUN すると特殊文字が別の文字に変わる。
+    // SAVE/LOAD ラウンドトリップでも 0x80-0xFF が保持されることを確認する。
+    use ichigojam_core::{exec_line_bytes, machine::Storage};
+    #[derive(Debug)]
+    struct MemStore { data: Vec<u8>, has: bool }
+    impl Storage for MemStore {
+        fn save(&mut self, _: u8, d: &[u8]) -> bool {
+            self.data = d.to_vec();
+            self.has = true;
+            true
+        }
+        fn load(&mut self, _: u8, buf: &mut [u8]) -> Option<usize> {
+            if !self.has { return None; }
+            let n = self.data.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.data[..n]);
+            buf[n..].fill(0);
+            Some(n)
+        }
+        fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
+            self.load(slot, buf)
+        }
+    }
+    let mut m = Machine::new();
+    m.set_storage(Box::new(MemStore { data: vec![], has: false }));
+    // 10 ?"A\xea\xff" — 文字列リテラル中にグラフィック文字 234, 255
+    let _ = exec_line_bytes(&mut m, b"10 ?\"A\xea\xff\"");
+    let _ = exec_line_bytes(&mut m, b"SAVE 0");
+    let _ = exec_line_bytes(&mut m, b"NEW");
+    let _ = exec_line_bytes(&mut m, b"LOAD 0");
+    let _ = exec_line_bytes(&mut m, b"RUN");
+    run_to_completion(&mut m);
+    let vram = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
+    let pattern = [b'A', 0xea, 0xff];
+    assert!(
+        vram.windows(3).any(|w| w == pattern),
+        "SAVE/LOAD/RUN should preserve graphic bytes 0xEA, 0xFF"
+    );
+}
+
+#[test]
+fn list_command_outputs_graphic_chars_unchanged() {
+    // LIST 表示で文字列リテラル内のグラフィック文字がそのまま VRAM へ書き出される。
+    use ichigojam_core::exec_line_bytes;
+    let mut m = Machine::new();
+    let _ = exec_line_bytes(&mut m, b"10 ?\"\xea\xff\"");
+    let _ = exec_line_bytes(&mut m, b"LIST");
+    let vram = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
+    let pattern = [0xea, 0xff];
+    assert!(
+        vram.windows(2).any(|w| w == pattern),
+        "LIST should print graphic bytes 0xEA, 0xFF verbatim"
+    );
+}
