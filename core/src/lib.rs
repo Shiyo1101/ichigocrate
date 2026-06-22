@@ -10,6 +10,7 @@ pub mod basic;
 pub mod errors;
 pub mod font;
 pub mod keycodes;
+pub mod keymap;
 pub mod machine;
 pub mod psg;
 pub mod ram;
