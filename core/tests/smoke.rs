@@ -393,6 +393,23 @@ fn kbd_sets_keyboard_id_and_ver_2_reflects() {
     assert_eq!(m.keyboard_id(), 1);
 }
 
+#[test]
+fn kbd_switches_physical_key_translation() {
+    // KBD コマンドで keymap_lookup の引く表が US/JA で実際に切替わること。
+    // HID 0x1f は数字 2 の物理キー。日本語配列で Shift+2 を打ったとき、
+    // KBD 0 なら US 解釈で '@'、KBD 1 なら JA 解釈で '"' が返る。
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "KBD 0");
+    assert_eq!(m.keymap_lookup(0x1f, true, false), b'@');
+    let _ = exec_line(&mut m, "KBD 1");
+    assert_eq!(m.keymap_lookup(0x1f, true, false), b'"');
+    // 0x2f: US `[` / JA `@`
+    let _ = exec_line(&mut m, "KBD 0");
+    assert_eq!(m.keymap_lookup(0x2f, false, false), b'[');
+    let _ = exec_line(&mut m, "KBD 1");
+    assert_eq!(m.keymap_lookup(0x2f, false, false), b'@');
+}
+
 // ============================================================
 // グラフィック文字 (128-255) のバイト保持テスト
 //
