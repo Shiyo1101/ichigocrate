@@ -1,4 +1,6 @@
-//! screen.h を Rust に移植。VRAM 文字操作およびピクセル描画。
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/screen.h
+// VRAM 文字操作およびピクセル描画。
 
 use crate::font::CHAR_PATTERN_JP;
 use crate::keycodes::{

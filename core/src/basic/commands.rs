@@ -963,6 +963,11 @@ impl Machine {
                 }
             }
         }
+        // u16 を超える桁数を受け付けると shift >= 16 で >> がパニックする。
+        let max_digits = (16 / bits_per_digit) as i16;
+        if m > max_digits {
+            m = max_digits;
+        }
         for i in (0..m).rev() {
             let shift = i as u32 * bits_per_digit;
             let mask = (1u16 << bits_per_digit) - 1;

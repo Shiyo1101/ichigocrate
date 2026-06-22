@@ -226,8 +226,7 @@ impl Machine {
         self.storage = Some(storage);
     }
 
-    // ---- 乱数 (random.h より) ----
-
+    // ---- 乱数 ----
     pub fn rnd_next(&mut self) -> u32 {
         let t = self.rndn[0] ^ (self.rndn[0].wrapping_shl(11));
         self.rndn[0] = self.rndn[1];
@@ -280,6 +279,11 @@ impl Machine {
     // ---- LIST (プログラム領域) 操作 ----
 
     pub fn list_get_number(&self, index: u16) -> i16 {
+        // POKE で LIST 終端 0 を消されると走査ループが LIST 領域外へ突き抜けるため、
+        // 範囲外アクセスは終端 (行番号 0) として扱う。
+        if (index as usize) + 2 > SIZE_RAM_LIST {
+            return 0;
+        }
         self.read_i16_le(OFFSET_RAM_LIST + index as usize)
     }
 
@@ -288,11 +292,17 @@ impl Machine {
     }
 
     pub fn list_get_length(&self, index: u16) -> u8 {
+        if (index as usize) + 3 > SIZE_RAM_LIST {
+            return 0;
+        }
         self.ram[OFFSET_RAM_LIST + index as usize + 2]
     }
 
     pub fn list_set_length(&mut self, index: u16, num: u8) {
-        self.ram[OFFSET_RAM_LIST + index as usize + 2] = num + (num & 1);
+        // num が奇数で 255 のとき num + (num & 1) が u8 をオーバーフローして
+        // debug panic / release で誤値となるため saturating で防ぐ。
+        let padded = num.saturating_add(num & 1);
+        self.ram[OFFSET_RAM_LIST + index as usize + 2] = padded;
     }
 
     /// 行番号 number 以上の最初の行のインデックスを返す。

@@ -100,18 +100,10 @@ impl Machine {
                 TOKEN_AND => value &= v2,
                 TOKEN_XOR => value ^= v2,
                 TOKEN_SHIFT_R => {
-                    if v2 > 0 {
-                        value = ((value as u16) >> v2) as i16;
-                    } else {
-                        value = value.wrapping_shl((-v2) as u32);
-                    }
+                    value = shift_signed(value, v2, true);
                 }
                 TOKEN_SHIFT_L => {
-                    if v2 > 0 {
-                        value = value.wrapping_shl(v2 as u32);
-                    } else {
-                        value = ((value as u16) >> (-v2)) as i16;
-                    }
+                    value = shift_signed(value, v2, false);
                 }
                 TOKEN_ASTER => value = value.wrapping_mul(v2),
                 TOKEN_SLASH | TOKEN_MOD_1 | TOKEN_MOD_2 => {
@@ -150,7 +142,7 @@ impl Machine {
     fn token_expression5(&mut self) -> BResult<i16> {
         let t = self.token_get();
         match t.code {
-            TOKEN_MINUS => Ok(-self.token_expression5()?),
+            TOKEN_MINUS => Ok(self.token_expression5()?.wrapping_neg()),
             TOKEN_NOT => Ok(!self.token_expression5()?),
             TOKEN_LNOT_1 | TOKEN_LNOT_2 => Ok((self.token_expression5()? == 0) as i16),
             TOKEN_NUMBER => Ok(t.value),
@@ -319,10 +311,19 @@ impl Machine {
                         break;
                     }
                     let s_start = OFFSET_RAM_LIST + index as usize + 3;
+                    // POKE で LIST が破壊された場合に行末まで走査できないことが
+                    // あるため、LIST 領域内に収まらない位置は走査打ち切り。
+                    if s_start >= OFFSET_RAM_LIST + SIZE_RAM_LIST {
+                        break;
+                    }
                     if self.ram[s_start] == b'@' {
                         let mut s = s_start;
                         let mut p = label_start;
+                        let s_end = OFFSET_RAM_LIST + SIZE_RAM_LIST;
                         loop {
+                            if s >= s_end {
+                                break;
+                            }
                             let c = self.ram[s];
                             s += 1;
                             if c == b':' || c == 0 || c == b'\'' || c == b' ' {
@@ -343,5 +344,22 @@ impl Machine {
             }
             _ => Err(ERR_SYNTAX_ERROR),
         }
+    }
+}
+
+/// シフト量を i16 全域 (負値や ±16 超) で受けても panic せずに結果を返す。
+/// シフト量の絶対値が 16 以上になる場合は IchigoJam の値域 (16bit) を
+/// 越えるので 0 として扱う。`right=true` は SHIFT_R、`false` は SHIFT_L。
+/// シフト方向は v2 の符号で反転する (例: SHIFT_R で v2<0 なら左シフト)。
+fn shift_signed(value: i16, v2: i16, right: bool) -> i16 {
+    let abs = (v2 as i32).unsigned_abs();
+    if abs >= 16 {
+        return 0;
+    }
+    let go_right = right == (v2 >= 0);
+    if go_right {
+        ((value as u16) >> abs) as i16
+    } else {
+        (value as u16).wrapping_shl(abs) as i16
     }
 }
