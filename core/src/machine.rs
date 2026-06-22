@@ -515,6 +515,15 @@ impl Machine {
         self.keyboard_id
     }
 
+    /// HID キーコード (USB usage ID 0..=0x67) と修飾キー状態から、現在の
+    /// `keyboard_id` に応じた US/JA テーブルを引いて IchigoJam 内部コードを
+    /// 返す。0 はそのキーに対する出力が無いことを表す (ホスト側で無視)。
+    /// ホスト (eframe など物理キーが取れる UI) がキー入力を文字へ翻訳する
+    /// 唯一の経路。
+    pub fn keymap_lookup(&self, hid: u8, shift: bool, alt: bool) -> u8 {
+        crate::keymap::lookup(self.keyboard_id, hid, shift, alt)
+    }
+
     /// BTN() 用にキーの押下/解放状態を記録する。`code` はキーに対応する
     /// ASCII コード (矢印は 28-31、スペースは 32、英字は大文字コード等)。
     pub fn key_set_down(&mut self, code: u8, down: bool) {

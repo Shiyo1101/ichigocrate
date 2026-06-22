@@ -662,9 +662,11 @@ impl Machine {
     }
 
     /// `KBD n` (Ver1.5 〜): キーボードレイアウトを切り替える。`!!n` で 0/1
-    /// に正規化。実機は `keycode2ascii` 差し替え + フラッシュ永続化だが、
-    /// 本移植は OS から論理キーで受け取るため `keyboard_id` を保持して
-    /// `VER(2)` に反映するだけ (永続化はメモリ内のみ)。
+    /// に正規化 (0 = US, 1 = JA)。`keyboard_id` を更新するとホスト側の
+    /// [`crate::keymap::lookup`] が引く表が切り替わり、物理キー位置から
+    /// 引いた文字が US/JA で変わる (例: Shift+2 が US で `@`、JA で `"`)。
+    /// `VER(2)` も同値を返す。実機の `keycode2ascii` 差し替え相当だが、
+    /// フラッシュ永続化はメモリ内のみ。
     pub(super) fn command_kbd(&mut self) -> BResult<()> {
         let n = self.token_expression()?;
         self.token_end()?;
