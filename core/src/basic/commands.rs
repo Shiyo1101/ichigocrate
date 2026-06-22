@@ -1,3 +1,6 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/basic.h
+
 //! `command_*` 群 — 各文 (PRINT, FOR, IF, SAVE, …) と `command_edit`、
 //! および `print_dec` / `print_radix`。共通パース処理は `super::tokenizer`。
 //!

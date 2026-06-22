@@ -1,5 +1,7 @@
-// Auto-converted from ichigojam-jp.fnt.h
-// Copyright 2014-2024 the IchigoJam authors. MIT license.
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/ichigojam-jp.fnt.h
+
+//! 日本語フォント (256 文字 × 8x8、ichigojam-jp.fnt.h から自動変換)。
 
 pub const CHAR_PATTERN_JP: [u8; 256 * 8] = [
     0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,

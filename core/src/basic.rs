@@ -1,3 +1,6 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/basic.h
+
 //! BASIC インタプリタの外殻 (実行ループとディスパッチ)。
 //!
 //! 各文/式の実装は [`commands`] / [`expr`] / [`tokenizer`] / [`sin`] に分かれる。

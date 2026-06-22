@@ -1,3 +1,6 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/tokens_v1.5.h
+
 //! BASIC トークン定義 (IchigoJam v1.5 互換)。
 //!
 //! v1.4 との差分は KBD/DAC が 126/127 に挿入され、IOT.OUT 以降が +2

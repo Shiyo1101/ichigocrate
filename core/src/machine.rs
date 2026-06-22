@@ -1,3 +1,9 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// 元 C 実装の以下を統合:
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/vars.h
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/random.h
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/basic.h
+
 //! IchigoJam 仮想マシンの中核状態。
 //!
 //! 元実装はグローバル変数の集合だが、本移植では `Machine` 構造体に集約し
@@ -227,6 +233,7 @@ impl Machine {
     }
 
     // ---- 乱数 ----
+
     pub fn rnd_next(&mut self) -> u32 {
         let t = self.rndn[0] ^ (self.rndn[0].wrapping_shl(11));
         self.rndn[0] = self.rndn[1];

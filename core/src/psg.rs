@@ -1,3 +1,6 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/psg.h
+
 //! PSG: MML プレイヤと BEEP。
 //!
 //! 元実装はハードウェアタイマでの周期トグルだが、本ポートはデスクトップ

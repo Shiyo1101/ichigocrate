@@ -1,3 +1,6 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/romajikana.h
+
 //! ローマ字 → カタカナ (半角) 入力変換。
 //!
 //! - 半角カタカナ (JIS X 0201) を出力する。0xB1-0xDF が「ア」～「゜」。

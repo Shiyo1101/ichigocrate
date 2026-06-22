@@ -1,3 +1,6 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/ram.h
+
 //! IchigoJam の RAM レイアウト定義 (ram.h より移植)
 //!
 //! 仮想アドレス空間:

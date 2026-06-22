@@ -1,3 +1,6 @@
+// Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
+// https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/error.h
+
 //! BASIC エラー型と内部伝搬用の Result 別名。
 //!
 //! メッセージ文言は `Display` で出力する (thiserror が生成)。
