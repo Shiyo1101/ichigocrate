@@ -49,20 +49,6 @@ const FKEY_BINDINGS: &[(Key, &str, bool)] = &[
     (Key::F9, "FILES", true),
 ];
 
-/// egui の `Key` から REPL/エディタが扱う制御コードへのマップ。
-const KEY_CONTROL_MAP: &[(Key, u8)] = &[
-    (Key::Backspace, kc::BACKSPACE),
-    (Key::Delete, kc::DELETE),
-    (Key::ArrowLeft, kc::CURSOR_LEFT),
-    (Key::ArrowRight, kc::CURSOR_RIGHT),
-    (Key::ArrowUp, kc::CURSOR_UP),
-    (Key::ArrowDown, kc::CURSOR_DOWN),
-    (Key::Tab, kc::TAB),
-    (Key::Home, kc::HOME),
-    (Key::End, kc::END),
-    (Key::PageUp, kc::PAGE_UP),
-    (Key::PageDown, kc::PAGE_DOWN),
-];
 
 fn main() -> eframe::Result<()> {
     // macOS の Input Method Kit が出す
@@ -604,54 +590,10 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
         }
         // 実機は keybuf を REPL 行編集と INKEY() で共有するが、本移植は
         // 行編集を input_putc/input_control が直接担うため keybuf は INKEY()
-        // 専用。よって全打鍵を keybuf にも流したいが、REPL 編集中に積むと
-        // 直接モードの INKEY() が編集文字を拾ってしまうので、実行中のみ積む。
-        // RUN は開始時に key_clear_key するのでこれで実機と同じ挙動になる。
+        // 専用。RUN 中以外は keybuf に積まない (REPL 編集中の文字を
+        // INKEY() が拾ってしまうのを避けるため)。
         let executing = m.is_executing();
-        // Alt(Windows) / Option(Mac) を押している間は IchigoJam のグラフィック
-        // 文字 (128-255) 入力モード。OS が合成する特殊文字 (例: mac の
-        // Option+A = "å") を挿入しないよう、Alt 押下中は Text イベントを無視し、
-        // 代わりに後段の Key イベントからグラフィック文字を生成する。
-        let alt_held = i.modifiers.alt;
-        if !alt_held {
-            for ev in &i.events {
-                if let egui::Event::Text(s) = ev {
-                    for c in s.chars() {
-                        if let Some(b) = char_to_basic(c) {
-                            // カナモード中はローマ字 → 半角カナ変換を通す
-                            m.input_putc(b);
-                            // INKEY() 用: 英字・数字・記号・スペースを取りこぼさない
-                            if executing {
-                                m.key_push(b);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        for &(k, code) in KEY_CONTROL_MAP {
-            if i.key_pressed(k) {
-                // カナモード中の Backspace は未確定バッファ管理のため
-                // input_putc を通す。それ以外の編集キーは input_control。
-                if k == Key::Backspace && m.key_kana {
-                    m.input_putc(code);
-                } else {
-                    m.input_control(code);
-                }
-                // INKEY() 用: 矢印 (28-31) や BS/DEL 等の制御コードも積む
-                if executing {
-                    m.key_push(code);
-                }
-            }
-        }
-        // Enter は Text イベントにも KEY_CONTROL_MAP にも現れないため個別に。
-        // 非実行中は execute_current_line で行確定に使うので keybuf には積まない。
-        if executing && i.key_pressed(Key::Enter) {
-            m.key_push(b'\n');
-        }
-        // Alt(Option) + 英字/数字 → IchigoJam グラフィック文字 (128-255)。
-        // 実行中は INKEY() 用キューへ、編集中は画面へ直接書く (グラフィック文字
-        // はローマ字ではないのでカナ変換 input_putc は通さず screen_putc を使う)。
+
         for ev in &i.events {
             if let egui::Event::Key {
                 key,
@@ -661,19 +603,51 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 ..
             } = ev
             {
-                if modifiers.alt {
-                    // 論理キーで引けないとき (mac で Option 合成により logical が
-                    // 非 Latin になる場合) は物理キー位置で引き直す。
-                    let g = alt_graphic_char(*key, modifiers.shift).or_else(|| {
-                        physical_key.and_then(|pk| alt_graphic_char(pk, modifiers.shift))
-                    });
-                    if let Some(g) = g {
-                        if executing {
-                            m.key_push(g);
-                        } else {
-                            m.screen_putc(g);
-                        }
+                // ホスト側で別処理: Enter (REPL 行確定 / 実行中は keybuf)、
+                // ESC (key_flg_esc 立て)、F1-F12 (F キー割当)。
+                // keymap は通さない。
+                if matches!(*key, Key::Enter) {
+                    if executing {
+                        m.key_push(b'\n');
                     }
+                    continue;
+                }
+                if is_host_reserved_key(*key) {
+                    continue;
+                }
+                // OS のレイアウト変換は経由せず、物理キー位置で keymap を引く
+                // (KBD コマンドの US/JA 切替を効かせるため)。physical_key が
+                // 取れない環境では論理キーをフォールバックに使う。
+                let phys = physical_key.unwrap_or(*key);
+                let Some(hid) = egui_key_to_hid(phys) else {
+                    continue;
+                };
+                let mut c = m.keymap_lookup(hid, modifiers.shift, modifiers.alt);
+                if c == 0 {
+                    continue;
+                }
+                // IchigoJam 慣習: 英字は常に大文字 (CAPS デフォルト ON)。
+                // keymap の col0 (lowercase) を引いた場合のみ補正する。
+                if c.is_ascii_lowercase() {
+                    c -= b'a' - b'A';
+                }
+                if executing {
+                    m.key_push(c);
+                    continue;
+                }
+                if is_edit_control_code(c) {
+                    // カナモード中の Backspace は未確定バッファ管理のため
+                    // input_putc を通す。それ以外の編集キーは input_control。
+                    if c == kc::BACKSPACE && m.key_kana {
+                        m.input_putc(c);
+                    } else {
+                        m.input_control(c);
+                    }
+                } else if c >= 128 {
+                    // グラフィック文字 (128-255) はローマ字 → カナ変換を通さない
+                    m.screen_putc(c);
+                } else {
+                    m.input_putc(c);
                 }
             }
         }
@@ -690,6 +664,125 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
             }
         }
     });
+}
+
+/// keymap の代わりにホスト側で別処理するキー。Enter / ESC / F キーは
+/// IchigoApp の他の経路 (`execute_current_line`、`key_flg_esc`、F キー
+/// 割当) が拾うため、keymap に流すと二重入力になる。
+fn is_host_reserved_key(k: Key) -> bool {
+    matches!(
+        k,
+        Key::Escape
+            | Key::F1
+            | Key::F2
+            | Key::F3
+            | Key::F4
+            | Key::F5
+            | Key::F6
+            | Key::F7
+            | Key::F8
+            | Key::F9
+            | Key::F10
+            | Key::F11
+            | Key::F12
+    )
+}
+
+/// keymap の戻り値のうち、REPL 編集を進める「制御コード」群。
+/// これらは `input_control` 経由で画面エディタへ流す。
+fn is_edit_control_code(c: u8) -> bool {
+    matches!(
+        c,
+        kc::BACKSPACE
+            | kc::DELETE
+            | kc::CURSOR_LEFT
+            | kc::CURSOR_RIGHT
+            | kc::CURSOR_UP
+            | kc::CURSOR_DOWN
+            | kc::TAB
+            | kc::HOME
+            | kc::END
+            | kc::PAGE_UP
+            | kc::PAGE_DOWN
+            | kc::INSERT_TOGGLE
+            | kc::LINE_SPLIT
+    )
+}
+
+/// egui の物理キーを USB HID Keyboard Usage ID へ変換する。
+/// 元 C 実装 `IchigoJam_P/src/hid.h` の `HID_KEYCODE_TO_ASCII_*` の
+/// 添字と一致させる (例: 数字 2 キー = 0x1f、`[` キー = 0x2f)。
+/// physical_key を引いて KBD コマンドの US/JA 切替を OS レイアウトに
+/// 依らず効かせるための入り口。
+fn egui_key_to_hid(k: Key) -> Option<u8> {
+    Some(match k {
+        // 英字: A=0x04 … Z=0x1d
+        Key::A => 0x04,
+        Key::B => 0x05,
+        Key::C => 0x06,
+        Key::D => 0x07,
+        Key::E => 0x08,
+        Key::F => 0x09,
+        Key::G => 0x0a,
+        Key::H => 0x0b,
+        Key::I => 0x0c,
+        Key::J => 0x0d,
+        Key::K => 0x0e,
+        Key::L => 0x0f,
+        Key::M => 0x10,
+        Key::N => 0x11,
+        Key::O => 0x12,
+        Key::P => 0x13,
+        Key::Q => 0x14,
+        Key::R => 0x15,
+        Key::S => 0x16,
+        Key::T => 0x17,
+        Key::U => 0x18,
+        Key::V => 0x19,
+        Key::W => 0x1a,
+        Key::X => 0x1b,
+        Key::Y => 0x1c,
+        Key::Z => 0x1d,
+        // 数字行: 1=0x1e … 9=0x26、0=0x27
+        Key::Num1 => 0x1e,
+        Key::Num2 => 0x1f,
+        Key::Num3 => 0x20,
+        Key::Num4 => 0x21,
+        Key::Num5 => 0x22,
+        Key::Num6 => 0x23,
+        Key::Num7 => 0x24,
+        Key::Num8 => 0x25,
+        Key::Num9 => 0x26,
+        Key::Num0 => 0x27,
+        // 制御 + Space
+        Key::Backspace => 0x2a,
+        Key::Tab => 0x2b,
+        Key::Space => 0x2c,
+        // 記号 (物理位置で引くため US 配列基準のキー名で対応する)
+        Key::Minus => 0x2d,
+        Key::Equals | Key::Plus => 0x2e,
+        Key::OpenBracket => 0x2f,
+        Key::CloseBracket => 0x30,
+        Key::Backslash | Key::Pipe => 0x31,
+        Key::Semicolon | Key::Colon => 0x33,
+        Key::Quote => 0x34,
+        Key::Backtick => 0x35,
+        Key::Comma => 0x36,
+        Key::Period => 0x37,
+        Key::Slash | Key::Questionmark => 0x38,
+        // カーソル / 編集系
+        Key::Insert => 0x49,
+        Key::Home => 0x4a,
+        Key::PageUp => 0x4b,
+        Key::Delete => 0x4c,
+        Key::End => 0x4d,
+        Key::PageDown => 0x4e,
+        Key::ArrowRight => 0x4f,
+        Key::ArrowLeft => 0x50,
+        Key::ArrowDown => 0x51,
+        Key::ArrowUp => 0x52,
+        _ => return None,
+    })
 }
 
 /// egui の `Key` を BTN() が参照する ASCII コードへ変換する。
@@ -716,45 +809,6 @@ fn key_to_btn_code(k: Key) -> Option<u8> {
             }
         }
     })
-}
-
-/// Alt(Option) + 英字/数字キーを IchigoJam のグラフィック文字 (128-255) へ
-/// 変換する。実機の HID キーボードドライバの Alt / Alt+Shift 列を再現する
-/// (US/JA 配列とも共通)。
-///
-/// - 英字 a-z: `224 + ((10 + (c - 'A')) % 32)` (a→234 … v→255, w→224 … z→227)
-/// - 数字 0-9: `224 + d`                       (0→224, 1→225 … 9→233)
-/// - Shift 併用時は上記から 96 を引く (128-159 の範囲)。
-///
-/// `k` は egui の論理キー。`Key::A`..=`Key::Z` の `name()` は "A".."Z"、
-/// `Key::Num0`..=`Key::Num9` は "0".."9" を返す。
-fn alt_graphic_char(k: Key, shift: bool) -> Option<u8> {
-    let bytes = k.name().as_bytes();
-    if bytes.len() != 1 {
-        return None;
-    }
-    let base: u16 = match bytes[0] {
-        c @ b'A'..=b'Z' => 224 + (10 + u16::from(c - b'A')) % 32,
-        c @ b'0'..=b'9' => 224 + u16::from(c - b'0'),
-        _ => return None,
-    };
-    let code = base as u8;
-    Some(if shift { code - 96 } else { code })
-}
-
-fn char_to_basic(c: char) -> Option<u8> {
-    if c == '\r' || c == '\n' {
-        return None; // ENTER は別ハンドラ
-    }
-    if (c as u32) >= 0x80 {
-        return None;
-    }
-    let mut b = c as u8;
-    // IchigoJam 慣習: 英字は常に大文字 (CAPS デフォルト ON)
-    if b.is_ascii_lowercase() {
-        b -= b'a' - b'A';
-    }
-    Some(b)
 }
 
 fn start_audio(tone: Arc<AtomicF32>) -> Result<cpal::Stream, String> {
@@ -809,36 +863,32 @@ fn start_audio(tone: Arc<AtomicF32>) -> Result<cpal::Stream, String> {
 mod tests {
     use super::*;
 
-    /// Alt + 英字/数字が実機キーボードドライバの変換テーブルと一致すること。
     #[test]
-    fn alt_graphic_letters_match_firmware_table() {
-        // a→234 … v→255, w→224 … z→227
-        assert_eq!(alt_graphic_char(Key::A, false), Some(234));
-        assert_eq!(alt_graphic_char(Key::V, false), Some(255));
-        assert_eq!(alt_graphic_char(Key::W, false), Some(224));
-        assert_eq!(alt_graphic_char(Key::Z, false), Some(227));
+    fn egui_key_to_hid_covers_letters_and_digits() {
+        assert_eq!(egui_key_to_hid(Key::A), Some(0x04));
+        assert_eq!(egui_key_to_hid(Key::Z), Some(0x1d));
+        assert_eq!(egui_key_to_hid(Key::Num1), Some(0x1e));
+        assert_eq!(egui_key_to_hid(Key::Num0), Some(0x27));
     }
 
     #[test]
-    fn alt_graphic_digits_match_firmware_table() {
-        assert_eq!(alt_graphic_char(Key::Num0, false), Some(224));
-        assert_eq!(alt_graphic_char(Key::Num1, false), Some(225));
-        assert_eq!(alt_graphic_char(Key::Num9, false), Some(233));
+    fn egui_key_to_hid_covers_symbols() {
+        // 物理キー位置で引けないと KBD 切替が効かないので必ず網羅する。
+        assert_eq!(egui_key_to_hid(Key::Num2), Some(0x1f));
+        assert_eq!(egui_key_to_hid(Key::OpenBracket), Some(0x2f));
+        assert_eq!(egui_key_to_hid(Key::Quote), Some(0x34));
+        assert_eq!(egui_key_to_hid(Key::Semicolon), Some(0x33));
     }
 
     #[test]
-    fn alt_shift_subtracts_96() {
-        // Alt+Shift は Alt から 96 を引いた符号 (128-159)
-        assert_eq!(alt_graphic_char(Key::A, true), Some(138));
-        assert_eq!(alt_graphic_char(Key::W, true), Some(128));
-        assert_eq!(alt_graphic_char(Key::Num0, true), Some(128));
-        assert_eq!(alt_graphic_char(Key::Num1, true), Some(129));
-    }
-
-    #[test]
-    fn non_alphanumeric_keys_have_no_graphic_char() {
-        assert_eq!(alt_graphic_char(Key::Space, false), None);
-        assert_eq!(alt_graphic_char(Key::Enter, false), None);
-        assert_eq!(alt_graphic_char(Key::ArrowLeft, false), None);
+    fn host_reserved_keys_skip_keymap() {
+        // F キー / ESC は別経路。keymap を引かないようにマーク。
+        assert!(is_host_reserved_key(Key::Escape));
+        assert!(is_host_reserved_key(Key::F1));
+        assert!(is_host_reserved_key(Key::F10));
+        assert!(!is_host_reserved_key(Key::A));
+        // Enter はホスト側でも処理するが is_host_reserved_key には含めず、
+        // process_keyboard の上で個別に処理する。
+        assert!(!is_host_reserved_key(Key::Enter));
     }
 }
