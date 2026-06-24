@@ -1,35 +1,9 @@
 //! より複雑なプログラム例
 
-use ichigojam_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM, SCREEN_W};
+mod common;
 
-fn screen(m: &Machine) -> String {
-    let mut s = String::new();
-    let v = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
-    for (i, c) in v.iter().enumerate() {
-        if i > 0 && i % SCREEN_W == 0 {
-            s.push('\n');
-        }
-        if *c == 0 {
-            s.push(' ');
-        } else if *c >= 32 && *c < 127 {
-            s.push(*c as char);
-        }
-    }
-    s
-}
-
-/// VRAM の y 行目を、最初の 0 (空セル) までの文字列として取り出す。
-fn vram_line(m: &Machine, y: usize) -> String {
-    let v = &m.ram[OFFSET_RAM_VRAM + y * SCREEN_W..OFFSET_RAM_VRAM + (y + 1) * SCREEN_W];
-    let mut s = String::new();
-    for c in v {
-        if *c == 0 {
-            break;
-        }
-        s.push(*c as char);
-    }
-    s
-}
+use common::{screen_text, vram_line};
+use ichigojam_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM};
 
 #[test]
 fn gosub_return() {
@@ -42,7 +16,7 @@ fn gosub_return() {
     let _ = exec_line(&mut m, "110 RETURN");
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen(&m);
+    let t = screen_text(&m);
     assert!(t.contains("START"), "{t}");
     assert!(t.contains("SUB"), "{t}");
     assert!(t.contains("END"), "{t}");
@@ -58,7 +32,7 @@ fn fib_program() {
     let _ = exec_line(&mut m, "50 NEXT");
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen(&m);
+    let t = screen_text(&m);
     // Fib: 1 1 2 3 5
     assert!(t.contains("1 1 2 3 5"), "{t}");
 }
@@ -95,7 +69,7 @@ fn inkey_in_running_program() {
     // プログラム実行中にキーが押された状況を模す。
     m.key_push(b'A');
     run_to_completion(&mut m);
-    let t = screen(&m);
+    let t = screen_text(&m);
     assert!(t.contains("65"), "INKEY() should return 65 for 'A': {t}");
 }
 
@@ -103,7 +77,7 @@ fn inkey_in_running_program() {
 fn nested_if_else() {
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "A=10:IF A>5 ?\"BIG\" ELSE ?\"SMALL\"");
-    let t = screen(&m);
+    let t = screen_text(&m);
     assert!(t.contains("BIG"), "{t}");
 }
 
@@ -123,7 +97,7 @@ fn wait_and_goto_loop_yields() {
     }
     assert_eq!(m.wait_frames, 60);
     // 1 行目が出力されていること
-    let t = screen(&m);
+    let t = screen_text(&m);
     assert!(t.contains("ICHIGOJAM RS"), "{t}");
 }
 
@@ -161,7 +135,7 @@ fn save_load_roundtrip() {
     assert_eq!(m.listsize, original_size);
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen(&m);
+    let t = screen_text(&m);
     assert!(t.contains("HELLO"), "{t}");
     assert!(t.contains("WORLD"), "{t}");
 }
@@ -219,7 +193,7 @@ fn error_message_printed_at_repl() {
         matches!(r, Err(ichigojam_core::BasicError::DivideByZero)),
         "{r:?}"
     );
-    assert!(screen(&m).contains("Divide by 0"), "{}", screen(&m));
+    assert!(screen_text(&m).contains("Divide by 0"), "{}", screen_text(&m));
 }
 
 #[test]
@@ -229,7 +203,7 @@ fn error_in_program_shows_line_number() {
     let _ = exec_line(&mut m, "10 ?1/0");
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen(&m);
+    let t = screen_text(&m);
     assert!(t.contains("Divide by 0"), "message missing:\n{t}");
     assert!(t.contains("in 10"), "line number missing:\n{t}");
 }
@@ -241,7 +215,7 @@ fn poke_peek_pcg() {
     let _ = exec_line(&mut m, "POKE #700,#FF,#AA,#55,#FF");
     let _ = exec_line(&mut m, "?PEEK(#700)");
     let _ = exec_line(&mut m, "?PEEK(#701)");
-    let t = screen(&m);
+    let t = screen_text(&m);
     assert!(t.contains("255"), "{t}");
     assert!(t.contains("170"), "{t}");
 }
