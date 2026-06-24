@@ -14,6 +14,7 @@ pub mod keymap;
 pub mod machine;
 pub mod psg;
 pub mod ram;
+pub mod render;
 pub mod romajikana;
 pub mod screen;
 pub mod tokens;
