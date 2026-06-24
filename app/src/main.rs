@@ -177,6 +177,9 @@ struct IchigoApp {
     wait_until: Option<Instant>,
     /// タイトル更新差分用に持つ直前フレームのカナモード状態
     last_kana: bool,
+    /// INPUT 文の対話入力待ち中なら、入力値の開始 VRAM 座標 (プロンプト直後の
+    /// cursorx, cursory)。Enter 確定時にこの位置から値テキストを読み取る。
+    input_origin: Option<(i32, i32)>,
 }
 
 impl IchigoApp {
@@ -204,6 +207,7 @@ impl IchigoApp {
             next_tick_time: now,
             wait_until: None,
             last_kana: false,
+            input_origin: None,
         }
     }
 }
@@ -233,8 +237,9 @@ impl App for IchigoApp {
         }
 
         // F キー: run=true は ENTER まで自動投入、false は文字挿入のみ
-        // (ユーザが続けてスロット番号等を入力できるよう待機)
-        if !self.running {
+        // (ユーザが続けてスロット番号等を入力できるよう待機)。
+        // INPUT の入力待ち中は値編集を妨げないため無効化する。
+        if !self.running && self.input_origin.is_none() {
             let fkey = ctx.input(|i| {
                 FKEY_BINDINGS
                     .iter()
@@ -271,8 +276,12 @@ impl App for IchigoApp {
                     }
                     if let Some(res) = self.machine.basic_step() {
                         self.running = false;
-                        if res == BasicResult::Execute {
-                            self.machine.put_str("OK\n");
+                        match res {
+                            BasicResult::Execute => self.machine.put_str("OK\n"),
+                            // INPUT 文が入力待ち → 対話入力モードへ。実行再開は
+                            // 入力確定時 (complete_input) に running を立て直す。
+                            BasicResult::Input => self.begin_input(),
+                            _ => {}
                         }
                         self.machine.key_flg_esc = 0;
                         break;
@@ -283,6 +292,13 @@ impl App for IchigoApp {
                         break;
                     }
                 }
+            }
+        } else if self.input_origin.is_some() {
+            // INPUT 入力待ち: ESC で中断、Enter で値を確定して実行再開。
+            if self.machine.key_flg_esc != 0 {
+                self.cancel_input();
+            } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                self.complete_input();
             }
         } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
             self.execute_current_line();
@@ -411,11 +427,47 @@ impl IchigoApp {
             Ok(LineOutcome::Edited) => {
                 // 行編集 (LIST 追加・削除) は OK を表示しない (IchigoJam 慣習)
             }
+            Ok(LineOutcome::AwaitingInput) => {
+                // 即時モードの INPUT。対話入力モードへ移行する。
+                self.begin_input();
+            }
             Err(_err) => {
                 // エラーメッセージは BASIC インタプリタ内で VRAM に
                 // 書き済 (command_error → basic_print_error)。
             }
         }
+    }
+
+    /// INPUT 文が入力待ちに入った時の準備。プロンプトは既に表示済みなので、
+    /// 現在のカーソル位置 (プロンプト直後) を入力値の開始位置として記録する。
+    fn begin_input(&mut self) {
+        self.input_origin = Some((self.machine.cursorx, self.machine.cursory));
+        self.machine.key_flg_esc = 0;
+    }
+
+    /// INPUT の入力確定。プロンプト直後から現在のカーソル行末までの VRAM を
+    /// 値テキストとして読み取り、`input_complete` で変数へ反映して実行を再開する。
+    fn complete_input(&mut self) {
+        let (ox, oy) = self.input_origin.take().unwrap_or((0, 0));
+        let w = self.machine.screen_cols();
+        let start = OFFSET_RAM_VRAM + ox as usize + oy as usize * w;
+        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
+        let len = self.machine.ram[start..vram_end]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(vram_end - start);
+        let line: Vec<u8> = self.machine.ram[start..start + len].to_vec();
+        self.machine.input_complete(&line);
+        // pc は INPUT 文の直後を指すので、実行を再開する。
+        self.running = true;
+    }
+
+    /// INPUT 入力中の ESC 中断。代入せずに入力待ちを解除し REPL へ戻る。
+    fn cancel_input(&mut self) {
+        self.input_origin = None;
+        self.machine.cancel_input();
+        self.machine.put_str("OK\n");
+        self.machine.key_flg_esc = 0;
     }
 }
 

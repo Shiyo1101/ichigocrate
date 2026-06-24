@@ -406,8 +406,14 @@ impl Machine {
         self.token_end()
     }
 
+    /// INPUT [prompt,] var: プロンプトを表示し、対話入力で 1 行受け取って
+    /// 変数へ代入する。文字列リテラルがあればそれを、無ければ `?` を出す。
+    ///
+    /// 実際の代入は入力確定後に [`Machine::input_complete`] が行う。ここでは
+    /// プロンプトを出し、代入先を `input_pending` に記録して入力待ち状態へ
+    /// 遷移するだけ。`pc` は INPUT 文の直後を指すため、入力確定後はそのまま
+    /// 実行を継続できる (C 版 `IJB_DONT_LOOP` の `command_input` 相当)。
     pub(super) fn command_input(&mut self) -> BResult<()> {
-        // MVP: INPUT は対話入力非対応のため値 0 を代入
         let t = self.token_get();
         let target = if t.code == TOKEN_STRING {
             self.token_puts();
@@ -419,8 +425,7 @@ impl Machine {
             self.parse_lvalue_index()?
         };
         self.token_end()?;
-        self.var_set(target, 0);
-        self.put_chr(b'\n');
+        self.input_pending = Some(target);
         Ok(())
     }
 
@@ -857,8 +862,13 @@ impl Machine {
         self.token_end()
     }
 
+    /// RENUM [start[,step]]: 行番号を `start` から `step` 刻みで振り直し、
+    /// GOTO/GOSUB の数値リテラル参照もあわせて書き換える (basic.h:2481)。
+    ///
+    /// 桁数の制約: 新しい番号の桁数が元の桁数より大きい場合、行内に詰め直す
+    /// 余地がないため `Illegal argument` を返す (C 実装は align 1byte ぶんだけ
+    /// シフトを試みるが、本移植ではその複雑さを避けて拒否で統一する)。
     pub(super) fn command_renum(&mut self) -> BResult<()> {
-        // 簡易版: 番号と行間隔指定はサポートするが、GOTO/GOSUB の参照書き換えは省略
         let mut start = 10i16;
         if self.token_get_char() != 0 {
             start = self.token_expression()?;
@@ -867,18 +877,131 @@ impl Machine {
         if start <= 0 || step <= 0 {
             return Err(ERR_ILLEGAL_ARGUMENT);
         }
+
+        // パス 1: 現在の行番号一覧 (old, index) を集める。pass 2 の参照書換時に
+        // 「行番号 X は何番目の行か」を引くために使う。
+        let mut lines: Vec<(i16, u16)> = Vec::new();
         let mut index: u16 = 0;
-        let mut current = start;
         loop {
             let num = self.list_get_number(index);
             if num == 0 {
                 break;
             }
-            self.list_set_number(index, current);
-            current = current.wrapping_add(step);
+            lines.push((num, index));
             index = index
                 .wrapping_add(self.list_get_length(index) as u16)
                 .wrapping_add(4);
+        }
+
+        // パス 2: 各行を走査し、GOTO/GOSUB の直後に来る数値リテラルを
+        // 新しい行番号に書き換える。番号自体の付け替えはパス 3 でやる。
+        for &(_, line_idx) in &lines {
+            self.renum_rewrite_line(line_idx, start, step, &lines)?;
+        }
+
+        // パス 3: 行番号自体を振り直す
+        let mut current = start;
+        for &(_, line_idx) in &lines {
+            self.list_set_number(line_idx, current);
+            current = current.wrapping_add(step);
+        }
+        Ok(())
+    }
+
+    /// 1 行ぶんを走査し、GOTO/GOSUB に続く数値リテラル (TOKEN_NUMBER) を
+    /// 新しい番号で上書きする。`lasttoken..pc` の範囲に右詰めで書き、空いた
+    /// 上位桁はスペースで埋める。トークナイザ状態は呼出後に元へ戻す。
+    fn renum_rewrite_line(
+        &mut self,
+        line_idx: u16,
+        start: i16,
+        step: i16,
+        lines: &[(i16, u16)],
+    ) -> BResult<()> {
+        // トークナイザ状態を退避 (token_get は self.pc / lasttoken 等を進めるため)
+        let saved_pc = self.pc;
+        let saved_lasttoken = self.lasttoken;
+        let saved_lasttokenpc = self.lasttokenpc;
+        let saved_bk = self.bklasttoken;
+        let saved_tokenmode = self.tokenmode;
+
+        self.tokenmode = 0;
+        let line_start = OFFSET_RAM_LIST + line_idx as usize + 3;
+        let line_len = self.list_get_length(line_idx) as usize;
+        let line_end = line_start + line_len;
+        self.pc = line_start;
+        // 直前トークンキャッシュは線をまたぐと整合性が崩れるためクリア
+        self.lasttoken = 0;
+        self.lasttokenpc = 0;
+
+        let mut result: BResult<()> = Ok(());
+        while self.pc < line_end {
+            let t = self.token_get();
+            match t.code {
+                TOKEN_NULL => break,
+                TOKEN_STRING => {
+                    self.token_skipstr();
+                }
+                TOKEN_REM_1 | TOKEN_REM_2 | TOKEN_ERROR => break,
+                TOKEN_GOTO | TOKEN_GOSUB_1 | TOKEN_GOSUB_2 => {
+                    let next = self.token_get();
+                    if next.code == TOKEN_NUMBER {
+                        // この時点で lasttoken = 先頭桁の位置、pc = 末尾桁の次
+                        let digit_start = self.lasttoken;
+                        let digit_end = self.pc;
+                        let oldnum = next.value;
+                        // 新しい番号 = start + (oldnum 未満の行数) * step
+                        // (C: list_findIndex(oldnum) と等価)
+                        let cnt = lines.iter().take_while(|(n, _)| *n < oldnum).count() as i16;
+                        let newnum = start.wrapping_add(cnt.wrapping_mul(step));
+                        if let Err(e) = self.write_decimal_in_place(digit_start, digit_end, newnum)
+                        {
+                            result = Err(e);
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // トークナイザ状態を復元
+        self.pc = saved_pc;
+        self.lasttoken = saved_lasttoken;
+        self.lasttokenpc = saved_lasttokenpc;
+        self.bklasttoken = saved_bk;
+        self.tokenmode = saved_tokenmode;
+        result
+    }
+
+    /// `[start, end)` を `value` の 10 進表記で右詰め上書きする。
+    /// 桁数が範囲に収まらない場合は `Illegal argument`。空いた上位桁はスペース。
+    fn write_decimal_in_place(&mut self, start: usize, end: usize, value: i16) -> BResult<()> {
+        let width = end - start;
+        // 桁数算出 (0 と負値は特別扱い: 負はそもそも RENUM の番号にならないが
+        // 防御的に符号無しで桁数を測る)
+        let mut digits = 0usize;
+        let mut tmp = value as u32;
+        if tmp == 0 {
+            digits = 1;
+        } else {
+            while tmp > 0 {
+                tmp /= 10;
+                digits += 1;
+            }
+        }
+        if digits > width {
+            return Err(ERR_ILLEGAL_ARGUMENT);
+        }
+        let mut n = value as u32;
+        for i in 0..width {
+            let pos = end - 1 - i;
+            if i < digits {
+                self.ram[pos] = b'0' + (n % 10) as u8;
+                n /= 10;
+            } else {
+                self.ram[pos] = b' ';
+            }
         }
         Ok(())
     }

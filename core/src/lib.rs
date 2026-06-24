@@ -32,6 +32,10 @@ pub enum LineOutcome {
     Executed,
     /// 行編集 (LIST に対する追加・削除)。`OK` は表示しない。
     Edited,
+    /// `INPUT` 文が対話入力待ちに入った。ホストは 1 行入力を受け取り
+    /// [`Machine::input_complete`] を呼んだうえで [`Machine::basic_step`] を
+    /// 呼び続けて実行を再開する。
+    AwaitingInput,
 }
 
 /// REPL: 入力された 1 行を生バイト列として実行する。
@@ -53,6 +57,7 @@ pub fn exec_line_bytes(machine: &mut Machine, line: &[u8]) -> Result<LineOutcome
     match machine.basic_execute(OFFSET_RAM_LINEBUF) {
         BasicResult::Execute => Ok(LineOutcome::Executed),
         BasicResult::Edit => Ok(LineOutcome::Edited),
+        BasicResult::Input => Ok(LineOutcome::AwaitingInput),
         BasicResult::StopOrErr => Err(machine.last_error.unwrap_or(BasicError::Break)),
     }
 }

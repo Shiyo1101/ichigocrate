@@ -24,6 +24,10 @@ pub enum BasicResult {
     Execute,
     /// 行番号付き入力により LIST が編集された (`OK` は表示しない)
     Edit,
+    /// `INPUT` 文がプロンプトを表示し、対話入力待ちに入った。ホストは 1 行
+    /// 入力させたあと [`Machine::input_complete`] を呼び、実行を再開させる
+    /// (C 版 `IJB_DONT_LOOP` の `BASIC_RESULT_INPUT` 相当)。
+    Input,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -118,6 +122,11 @@ pub struct Machine {
     pub program_running: bool,
     pub(crate) noresmode: bool,
 
+    /// `INPUT` 文の入力待ち状態。`Some(target)` のとき、ホストが 1 行入力を
+    /// 受け取って [`Machine::input_complete`] を呼ぶまで実行を中断する。
+    /// `target` は代入先の変数/配列要素のスロット番号。
+    pub(crate) input_pending: Option<usize>,
+
     pub(crate) psgoct: u8,
     pub(crate) psgdeflen: u8,
     pub(crate) psgratio: u8,
@@ -201,6 +210,7 @@ impl Machine {
             keys_down: [false; 256],
             program_running: false,
             noresmode: false,
+            input_pending: None,
 
             psgoct: 3,
             psgdeflen: 8,
@@ -591,6 +601,64 @@ impl Machine {
     /// 判定には使えず、ホストが同期する [`Machine::program_running`] を見る。
     pub fn is_executing(&self) -> bool {
         self.program_running
+    }
+
+    /// `INPUT` 文がプロンプトを出して対話入力待ちに入っているか。
+    /// ホストはこれが真の間、1 行入力を受け付け、確定時に
+    /// [`Machine::input_complete`] を呼ぶ。
+    pub fn is_awaiting_input(&self) -> bool {
+        self.input_pending.is_some()
+    }
+
+    /// INPUT 入力待ちを代入せずに解除する (ESC 中断や NEW 等のリセット用)。
+    pub fn cancel_input(&mut self) {
+        self.input_pending = None;
+    }
+
+    /// 対話入力で得た 1 行 (`line`) を `INPUT` の代入先へ反映し、入力待ちを
+    /// 解除する。`line` は IchigoJam 文字コードの生バイト列で、式として評価
+    /// した結果を変数へ代入する (C 版 `command_input2` 相当)。
+    ///
+    /// 評価には LINEBUF を一時利用するため、呼出前の LINEBUF 内容・トークナイザ
+    /// 状態・`pc` を退避して評価後に復元する。これにより、即時モードで
+    /// `INPUT` を実行して `pc` が LINEBUF 内にある場合でも再開位置が壊れない。
+    /// パースに失敗した場合 (空入力など) は C の `errorignore` と同様に
+    /// 代入をスキップし、変数は元の値のまま残す。
+    pub fn input_complete(&mut self, line: &[u8]) {
+        let Some(target) = self.input_pending.take() else {
+            return;
+        };
+
+        let saved_pc = self.pc;
+        let saved_lasttoken = self.lasttoken;
+        let saved_lasttokenpc = self.lasttokenpc;
+        let saved_bk = self.bklasttoken;
+        let saved_tokenmode = self.tokenmode;
+        let saved_linebuf: Vec<u8> =
+            self.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + N_LINEBUF].to_vec();
+
+        let max = N_LINEBUF.saturating_sub(1);
+        let n = line.len().min(max);
+        self.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + n].copy_from_slice(&line[..n]);
+        self.ram[OFFSET_RAM_LINEBUF + n] = 0;
+
+        self.pc = OFFSET_RAM_LINEBUF;
+        self.lasttoken = 0;
+        self.lasttokenpc = 0;
+        self.tokenmode = 0;
+        if let Ok(value) = self.token_expression() {
+            self.var_set(target, value);
+        }
+
+        self.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + N_LINEBUF]
+            .copy_from_slice(&saved_linebuf);
+        self.pc = saved_pc;
+        self.lasttoken = saved_lasttoken;
+        self.lasttokenpc = saved_lasttokenpc;
+        self.bklasttoken = saved_bk;
+        self.tokenmode = saved_tokenmode;
+
+        self.put_chr(b'\n');
     }
 
     /// 対話編集用の制御コード入力 (矢印・BS・DEL・Home/End 等)。

@@ -85,6 +85,12 @@ impl Machine {
 
         self.dispatch_command(token.code)?;
 
+        // INPUT 文が入力待ちに入ったらホストへ制御を返す。再開は
+        // input_complete → 次回 basic_step で pc 直後から継続。
+        if self.is_awaiting_input() {
+            return Ok(Some(BasicResult::Input));
+        }
+
         if self.stop_execute() {
             return Err(ERR_BREAK);
         }
