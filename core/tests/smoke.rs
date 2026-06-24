@@ -1,7 +1,9 @@
 //! 最小限の動作確認テスト
 
 use ichigojam_core::keycodes::{CURSOR_DOWN, CURSOR_UP, INSERT_TOGGLE};
-use ichigojam_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM, PC_NULL, SCREEN_W};
+use ichigojam_core::{
+    exec_line, run_to_completion, BasicResult, Machine, OFFSET_RAM_VRAM, PC_NULL, SCREEN_W,
+};
 
 fn screen_text(m: &Machine) -> String {
     let mut s = String::new();
@@ -690,4 +692,491 @@ fn chr_dollar_concat_graphic_bytes() {
     assert_eq!(m.ram[OFFSET_RAM_VRAM], 200);
     assert_eq!(m.ram[OFFSET_RAM_VRAM + 1], 201);
     assert_eq!(m.ram[OFFSET_RAM_VRAM + 2], 202);
+}
+
+// ============================================================
+// 未テストだったコマンド群の C 実装との突合せテスト
+// ============================================================
+
+use ichigojam_core::ram::{OFFSET_RAM_PCG, SIZE_RAM_PCG};
+use ichigojam_core::OFFSET_RAM_LIST;
+
+/// NEW: LIST 領域がゼロクリアされ listsize/pc/pcbreak も初期化される
+/// (basic.h:2203 command_new と同等)。
+#[test]
+fn new_clears_list_and_pc() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 ?\"X\"");
+    let _ = exec_line(&mut m, "20 ?\"Y\"");
+    assert!(m.listsize > 0);
+    let _ = exec_line(&mut m, "NEW");
+    assert_eq!(m.listsize, 0);
+    assert_eq!(m.pc, PC_NULL);
+    // LIST 先頭バイトが全部 0 になっていることをサンプリング
+    for &b in &m.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + 32] {
+        assert_eq!(b, 0);
+    }
+}
+
+/// END / STOP: PC を NULL に戻す (basic.h:2544)
+#[test]
+fn end_resets_pc() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 END");
+    let _ = exec_line(&mut m, "20 ?\"never\"");
+    let _ = exec_line(&mut m, "RUN");
+    run_to_completion(&mut m);
+    assert_eq!(m.pc, PC_NULL);
+    // 20 行に到達していないこと
+    assert!(!screen_text(&m).contains("never"));
+}
+
+/// CLV: 変数領域 (配列 0..101 + A-Z) がゼロクリアされる (basic.h:2871)。
+/// `A` は内部インデックス `IJB_SIZEOF_ARRAY (=102)` から始まる。
+#[test]
+fn clv_clears_variables() {
+    use ichigojam_core::ram::IJB_SIZEOF_ARRAY;
+    let var_a = IJB_SIZEOF_ARRAY;
+    let var_b = IJB_SIZEOF_ARRAY + 1;
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "A=123");
+    let _ = exec_line(&mut m, "B=456");
+    let _ = exec_line(&mut m, "[3]=7"); // 配列要素も書く
+    assert_eq!(m.var_get(var_a), 123);
+    assert_eq!(m.var_get(var_b), 456);
+    assert_eq!(m.var_get(3), 7);
+    let _ = exec_line(&mut m, "CLV");
+    assert_eq!(m.var_get(var_a), 0);
+    assert_eq!(m.var_get(var_b), 0);
+    assert_eq!(m.var_get(3), 0);
+}
+
+/// CLK: キーバッファを空にする (basic.h:3117)。
+/// 直後の `key_get_key` は -1 (未取得) を返す。
+#[test]
+fn clk_clears_key_buffer() {
+    let mut m = Machine::new();
+    m.key_push(b'X');
+    m.key_push(b'Y');
+    let _ = exec_line(&mut m, "CLK");
+    assert_eq!(m.key_get_key(), -1);
+}
+
+/// CLT: tick カウンタ (frames) をゼロに戻す (basic.h:2866)
+#[test]
+fn clt_resets_frames_counter() {
+    let mut m = Machine::new();
+    m.frames = 1234;
+    let _ = exec_line(&mut m, "CLT");
+    assert_eq!(m.frames, 0);
+}
+
+/// CLP: PCG (書き換え可能キャラクタ) をフォント末尾 32 文字で初期化する
+/// (basic.h:3113 → screen_clp)
+#[test]
+fn clp_resets_pcg_to_font_tail() {
+    let mut m = Machine::new();
+    // まず PCG を全部 0xFF で潰す
+    m.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG].fill(0xff);
+    let _ = exec_line(&mut m, "CLP");
+    // CLP 後は font の末尾 32 文字でちょうど埋まる
+    // (内容は font 依存のためフィールド全部が 0xff のままではないことを確認)
+    let pcg = &m.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG];
+    assert!(pcg.iter().any(|&b| b != 0xff), "PCG should be reset");
+}
+
+/// LED: 引数 0 で消灯、それ以外で点灯 (basic.h:2812)
+#[test]
+fn led_command_toggles_led_state() {
+    let mut m = Machine::new();
+    assert!(!m.led);
+    let _ = exec_line(&mut m, "LED 1");
+    assert!(m.led);
+    let _ = exec_line(&mut m, "LED 0");
+    assert!(!m.led);
+    // 0 以外は ON
+    let _ = exec_line(&mut m, "LED 42");
+    assert!(m.led);
+}
+
+/// SRND: 同じシードを与えれば RND は同じ値を返す (basic.h:3144)
+#[test]
+fn srnd_makes_rnd_reproducible() {
+    let mut a = Machine::new();
+    let mut b = Machine::new();
+    let _ = exec_line(&mut a, "SRND 42");
+    let _ = exec_line(&mut b, "SRND 42");
+    let _ = exec_line(&mut a, "?RND(100)");
+    let _ = exec_line(&mut b, "?RND(100)");
+    assert_eq!(vram_line(&a, 0), vram_line(&b, 0));
+    // 異なるシードならふつう違う値になる
+    let mut c = Machine::new();
+    let _ = exec_line(&mut c, "SRND 1");
+    let _ = exec_line(&mut c, "?RND(10000)");
+    let _ = exec_line(&mut b, "?RND(10000)");
+    // 完全一致になる可能性はゼロではないが、IchigoJam の xorshift では実質起きない
+    assert_ne!(vram_line(&c, 0), vram_line(&b, 1));
+}
+
+/// SCROLL 0/1/2/3 がそれぞれ UP/RIGHT/DOWN/LEFT に対応 (screen.h:309)
+#[test]
+fn scroll_directions_move_vram() {
+    // SCROLL 0 (UP): 2 行目に書いた文字が 1 行目に来る
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "LOCATE 0,1");
+    let _ = exec_line(&mut m, "?\"AB\";");
+    let _ = exec_line(&mut m, "SCROLL 0");
+    assert_eq!(vram_line(&m, 0), "AB");
+
+    // SCROLL 1 (RIGHT): 0 列目に書いた文字が 1 列目に来る
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "LOCATE 0,0");
+    let _ = exec_line(&mut m, "?\"P\";");
+    let _ = exec_line(&mut m, "SCROLL 1");
+    assert_eq!(m.ram[OFFSET_RAM_VRAM + 1], b'P');
+    assert_eq!(m.ram[OFFSET_RAM_VRAM], 0);
+
+    // SCROLL 2 (DOWN): 0 行目に書いた文字が 1 行目に来る
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "LOCATE 0,0");
+    let _ = exec_line(&mut m, "?\"CD\";");
+    let _ = exec_line(&mut m, "SCROLL 2");
+    assert_eq!(vram_line(&m, 1), "CD");
+
+    // SCROLL 3 (LEFT): 1 列目に書いた文字が 0 列目に来る
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "LOCATE 1,0");
+    let _ = exec_line(&mut m, "?\"Q\";");
+    let _ = exec_line(&mut m, "SCROLL 3");
+    assert_eq!(m.ram[OFFSET_RAM_VRAM], b'Q');
+}
+
+/// COPY: 正の len は順方向、負の len は逆方向 (basic.h:3082)。
+/// COPY のアドレスは仮想アドレス (OFFSET_RAMROM 加算済み) を渡すため、
+/// PCG 先頭 (ram[0]) は仮想アドレス OFFSET_RAMROM になる。
+#[test]
+fn copy_forward_and_backward() {
+    use ichigojam_core::OFFSET_RAMROM;
+    let pcg_v = OFFSET_RAMROM as i32; // PCG 先頭の仮想アドレス
+    let mut m = Machine::new();
+    // src 範囲 (PCG[0..8]) に "ABCDEFGH" を直接書く
+    for i in 0..8 {
+        m.ram[OFFSET_RAM_PCG + i] = b'A' + i as u8;
+    }
+    // 順方向: dst=PCG+8, src=PCG+0, len=8 → PCG[8..16] が "ABCDEFGH"
+    let cmd = format!("COPY {},{},8", pcg_v + 8, pcg_v);
+    let _ = exec_line(&mut m, &cmd);
+    for i in 0..8 {
+        assert_eq!(m.ram[OFFSET_RAM_PCG + 8 + i], b'A' + i as u8);
+    }
+
+    // 逆方向: 重なりがある領域を 1 byte 後ろへシフト。
+    // dst=PCG+7, src=PCG+6, len=-7 → ram[7]←ram[6], ram[6]←ram[5], ...
+    //                                ram[1]←ram[0]。先頭 ram[0] は変わらない。
+    for i in 0..8 {
+        m.ram[OFFSET_RAM_PCG + i] = b'A' + i as u8;
+    }
+    let cmd = format!("COPY {},{},-7", pcg_v + 7, pcg_v + 6);
+    let _ = exec_line(&mut m, &cmd);
+    assert_eq!(m.ram[OFFSET_RAM_PCG + 7], b'G');
+    assert_eq!(m.ram[OFFSET_RAM_PCG + 6], b'F');
+    assert_eq!(m.ram[OFFSET_RAM_PCG + 1], b'A');
+    assert_eq!(m.ram[OFFSET_RAM_PCG], b'A');
+}
+
+/// `@LABEL` を文として書くと、`:` または行末までコメント扱いになる
+/// (basic.h:3156 command_at, 1.2b40 仕様)
+#[test]
+fn at_label_statement_is_comment() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 @TOP:?\"HIT\"");
+    let _ = exec_line(&mut m, "RUN");
+    run_to_completion(&mut m);
+    // `:` 以降は実行されるので "HIT" が出る
+    assert!(screen_text(&m).contains("HIT"));
+}
+
+/// `GOTO @LABEL` は LIST から `@LABEL` 行を探してその行へ飛ぶ
+/// (basic.h:1573 token_expression5 内の TOKEN_AT 処理)
+#[test]
+fn goto_at_label_jumps_to_label_line() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 GOTO @SKIP");
+    let _ = exec_line(&mut m, "20 ?\"NO\"");
+    let _ = exec_line(&mut m, "30 @SKIP");
+    let _ = exec_line(&mut m, "40 ?\"YES\"");
+    let _ = exec_line(&mut m, "RUN");
+    run_to_completion(&mut m);
+    assert!(screen_text(&m).contains("YES"));
+    assert!(!screen_text(&m).contains("NO"));
+}
+
+/// INPUT は即値の代入はせず、プロンプトを出して入力待ちに入る。
+/// 確定するまで変数は元の値のまま (代入は input_complete が担う)。
+#[test]
+fn input_enters_await_state_without_assigning() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "A=99");
+    let _ = exec_line(&mut m, "INPUT A");
+    assert!(m.is_awaiting_input());
+    assert_eq!(m.var_get(102), 99);
+}
+
+/// BEEP (引数なし): 既定 TONE=10, LEN=3。tone>0 で current_tone_hz が
+/// 0 でない値になる (basic.h:2963)。
+#[test]
+fn beep_no_args_uses_default_tone() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "BEEP");
+    assert!(m.psg_sound());
+    assert!(m.current_tone_hz > 0.0);
+}
+
+/// PLAY (引数なし): MML 停止 (basic.h:2934)。psgmml が None になり
+/// 無音になる。
+#[test]
+fn play_with_no_arg_stops_mml() {
+    let mut m = Machine::new();
+    // 一度 BEEP で鳴らしてから PLAY (引数なし) で止める
+    let _ = exec_line(&mut m, "BEEP 10,1000");
+    assert!(m.psg_sound());
+    let _ = exec_line(&mut m, "PLAY");
+    assert!(!m.psg_sound());
+}
+
+/// RENUM: 行番号を再採番する (basic.h:2481)。GOTO/GOSUB を含まない
+/// プレーン行で行番号自体が振り直されること。参照書換は別テスト
+/// (`renum_rewrites_goto_and_gosub_references`) で検証する。
+#[test]
+fn renum_renumbers_line_numbers_only() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "5 ?\"A\"");
+    let _ = exec_line(&mut m, "7 ?\"B\"");
+    let _ = exec_line(&mut m, "99 ?\"C\"");
+    let _ = exec_line(&mut m, "RENUM 10,10");
+    // 行番号が 10, 20, 30 に振り直される
+    assert_eq!(m.list_get_number(0), 10);
+    let mut idx = m.list_get_length(0) as u16 + 4;
+    assert_eq!(m.list_get_number(idx), 20);
+    idx += m.list_get_length(idx) as u16 + 4;
+    assert_eq!(m.list_get_number(idx), 30);
+}
+
+/// RENUM が GOTO/GOSUB の数値リテラル参照も書き換える (basic.h:2389
+/// command_renum2 と同等)。
+///
+/// 桁数を変えない範囲 (2 桁→2 桁) で正しさを確認し、続けて 3 桁→1 桁
+/// (縮小方向は本移植でも常に成功) のケースも検証する。
+#[test]
+fn renum_rewrites_goto_and_gosub_references() {
+    // === 2 桁→2 桁 ===
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 GOTO 30");
+    let _ = exec_line(&mut m, "20 ?\"MID\"");
+    let _ = exec_line(&mut m, "30 GOSUB 20");
+    let _ = exec_line(&mut m, "40 GOTO 10");
+    let _ = exec_line(&mut m, "RENUM 50,10");
+    // 行番号: 10,20,30,40 → 50,60,70,80
+    assert_eq!(m.list_get_number(0), 50);
+    // 参照: GOTO 30 → GOTO 70、GOSUB 20 → GOSUB 60、GOTO 10 → GOTO 50
+    // (走らせて MID が出ることを 1 サイクル分で確認する。RUN 後に
+    // GOSUB→RETURN→次行 GOTO 50 で 50 行目に戻ってループするため、
+    // basic_step を有限回ぶん回して MID が出るかを見る。)
+    let _ = exec_line(&mut m, "RUN");
+    for _ in 0..500 {
+        if m.basic_step().is_some() {
+            break;
+        }
+        if screen_text(&m).contains("MID") {
+            break;
+        }
+    }
+    assert!(
+        screen_text(&m).contains("MID"),
+        "GOSUB 60 が 60 行目に届いていない: {:?}",
+        screen_text(&m)
+    );
+
+    // === 3 桁→1 桁 (縮小) ===
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "100 GOTO 300");
+    let _ = exec_line(&mut m, "200 ?\"OK\"");
+    let _ = exec_line(&mut m, "300 GOSUB 200");
+    let _ = exec_line(&mut m, "RENUM 1,1");
+    assert_eq!(m.list_get_number(0), 1);
+    let _ = exec_line(&mut m, "RUN");
+    for _ in 0..200 {
+        if m.basic_step().is_some() {
+            break;
+        }
+        if screen_text(&m).contains("OK") {
+            break;
+        }
+    }
+    assert!(
+        screen_text(&m).contains("OK"),
+        "GOSUB 200→2 への縮小書換が機能していない: {:?}",
+        screen_text(&m)
+    );
+}
+
+/// RENUM が桁数オーバーで Illegal argument を返す: 1 桁参照 (例: `GOTO 5`) を
+/// 3 桁の新番号に振り直すと行内バッファに収まらないため拒否する
+/// (C 実装の align 1byte シフト相当は本移植では未対応)。
+#[test]
+fn renum_rejects_digit_overflow() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "5 GOTO 5");
+    let res = exec_line(&mut m, "RENUM 100,100");
+    assert!(res.is_err(), "1 桁→3 桁の参照書換は拒否されるべき");
+}
+
+/// RENUM の引数バリデーション: start<=0 または step<=0 は Illegal argument
+/// (basic.h:2487)。
+#[test]
+fn renum_rejects_non_positive_args() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 ?\"X\"");
+    let res = exec_line(&mut m, "RENUM 0,10");
+    assert!(res.is_err());
+    let res = exec_line(&mut m, "RENUM 10,0");
+    assert!(res.is_err());
+}
+
+/// OK 2: noresmode (応答抑制) ON、それ以外は OFF (commands.rs:331)
+#[test]
+fn ok_2_enables_quiet_mode() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "OK 2");
+    // noresmode は pub(crate) のため公開 API では直接見えない。
+    // 次の `OK 0` で OFF に戻すことだけ通す動作確認とする。
+    let _ = exec_line(&mut m, "OK 0");
+}
+
+/// CONT: ESC ブレーク後、停止行から再開する (basic.h:1888)。
+/// STOP/END は `pcbreak` も NULL にするため CONT で再開できないのが仕様。
+/// CONT が効くのは「ESC でブレークしたとき」だけ。
+#[test]
+fn cont_resumes_from_esc_break() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 A=A+1");
+    let _ = exec_line(&mut m, "20 IF A<100 GOTO 10");
+    let _ = exec_line(&mut m, "30 ?\"DONE\"");
+    let _ = exec_line(&mut m, "RUN");
+    // 数ステップ実行したところで ESC を入れて中断させる
+    for _ in 0..5 {
+        if m.basic_step().is_some() {
+            break;
+        }
+    }
+    m.key_flg_esc = 1;
+    while m.pc != PC_NULL {
+        if m.basic_step().is_some() {
+            break;
+        }
+    }
+    m.key_flg_esc = 0;
+    // ESC ブレーク後は pcbreak に位置が記録され、CONT で再開できる。
+    // ループ条件 A<100 が成立する限り 10→20 を繰り返し、最後に 30 で DONE。
+    let _ = exec_line(&mut m, "CONT");
+    run_to_completion(&mut m);
+    assert!(
+        screen_text(&m).contains("DONE"),
+        "CONT should resume the loop until A>=100, then print DONE"
+    );
+}
+
+/// STOP は pcbreak を NULL に戻すため、その後の CONT は無効化される
+/// (basic.h:2544 / 2546 で `pc = pcbreak = NULL`)。
+#[test]
+fn stop_disables_subsequent_cont() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 STOP");
+    let _ = exec_line(&mut m, "20 ?\"AFTER\"");
+    let _ = exec_line(&mut m, "RUN");
+    run_to_completion(&mut m);
+    assert_eq!(m.pc, PC_NULL);
+    let _ = exec_line(&mut m, "CONT");
+    run_to_completion(&mut m);
+    // STOP は pcbreak=NULL にするので CONT しても 20 行へは進まない
+    assert!(!screen_text(&m).contains("AFTER"));
+}
+
+/// プログラム実行中の INPUT は basic_step が `BasicResult::Input` を返して
+/// 入力待ちに入り、`input_complete` で受け取った値を変数へ代入して実行を
+/// 再開する (basic.h:2136 command_input / IJB_DONT_LOOP)。
+#[test]
+fn input_assigns_typed_value_during_run() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 INPUT A");
+    let _ = exec_line(&mut m, "20 ?A*2");
+    let _ = exec_line(&mut m, "RUN");
+
+    // INPUT 文に達すると Input が返り、入力待ちになる。
+    let mut hit = false;
+    for _ in 0..50 {
+        if let Some(r) = m.basic_step() {
+            assert_eq!(r, BasicResult::Input);
+            hit = true;
+            break;
+        }
+    }
+    assert!(hit, "INPUT が入力待ち (BasicResult::Input) を返さなかった");
+    assert!(m.is_awaiting_input());
+    // デフォルトプロンプト '?' が表示されている。
+    assert!(screen_text(&m).contains('?'));
+
+    m.input_complete(b"21");
+    assert!(!m.is_awaiting_input());
+    assert_eq!(m.var_get(102), 21);
+
+    // 入力後は INPUT 文の直後 (?A*2) から継続して 42 を出力する。
+    run_to_completion(&mut m);
+    assert!(
+        screen_text(&m).contains("42"),
+        "INPUT 後に実行が継続していない: {:?}",
+        screen_text(&m)
+    );
+}
+
+/// INPUT は数値リテラルだけでなく式も入力値として評価する (C: command_let2)。
+/// 文字列プロンプト付き構文 `INPUT "...",var` も確認する。
+#[test]
+fn input_evaluates_expression_with_prompt() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "B=3");
+    // 即時モードの INPUT は AwaitingInput を返す。
+    let _ = exec_line(&mut m, "INPUT \"VAL\",A");
+    assert!(m.is_awaiting_input());
+    assert!(screen_text(&m).contains("VAL"));
+
+    m.input_complete(b"B+4");
+    assert_eq!(m.var_get(102), 7);
+}
+
+/// 空入力 (Enter のみ) はパースに失敗するため、C の errorignore と同様に
+/// 代入をスキップし、変数は元の値のまま残す。
+#[test]
+fn input_empty_keeps_previous_value() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "A=5");
+    let _ = exec_line(&mut m, "INPUT A");
+    assert!(m.is_awaiting_input());
+
+    m.input_complete(b"");
+    assert!(!m.is_awaiting_input());
+    assert_eq!(m.var_get(102), 5);
+}
+
+/// cancel_input は代入せず入力待ちを解除する (ESC 中断相当)。
+#[test]
+fn cancel_input_clears_pending_without_assigning() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "A=9");
+    let _ = exec_line(&mut m, "INPUT A");
+    assert!(m.is_awaiting_input());
+
+    m.cancel_input();
+    assert!(!m.is_awaiting_input());
+    assert_eq!(m.var_get(102), 9);
 }
