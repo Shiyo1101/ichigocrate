@@ -231,20 +231,20 @@ fn kbd_sets_keyboard_id_and_ver_2_reflects() {
     // VER(2) が現在の ID を返すこと。
     let mut m = Machine::new();
 
-    // 初期値は 0 (US)
+    // 初期値は 1 (JA = デフォルト)
     let _ = exec_line(&mut m, "?VER(2)");
-    assert_eq!(vram_line(&m, 0), "0");
+    assert_eq!(vram_line(&m, 0), "1");
 
-    // KBD 1 → JA。?VER(2) の改行でカーソルは y=1 へ進むだけ
+    // KBD 0 → US。?VER(2) の改行でカーソルは y=1 へ進むだけ
     // (exec_line は OK を出さない) なので、2 回目の VER(2) は y=1 に書かれる。
-    let _ = exec_line(&mut m, "KBD 1");
-    assert_eq!(m.keyboard_id(), 1);
-    let _ = exec_line(&mut m, "?VER(2)");
-    assert_eq!(vram_line(&m, 1), "1");
-
-    // KBD 0 → US
     let _ = exec_line(&mut m, "KBD 0");
     assert_eq!(m.keyboard_id(), 0);
+    let _ = exec_line(&mut m, "?VER(2)");
+    assert_eq!(vram_line(&m, 1), "0");
+
+    // KBD 1 → JA
+    let _ = exec_line(&mut m, "KBD 1");
+    assert_eq!(m.keyboard_id(), 1);
 
     // KBD 2 のような 0 以外の任意値は JA (1) に正規化される
     let _ = exec_line(&mut m, "KBD 2");
