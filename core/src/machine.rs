@@ -108,8 +108,8 @@ pub struct Machine {
     /// INKEY() 用のキューイング入力バッファ
     pub(crate) keybuf: VecDeque<u8>,
     /// キーボードレイアウト ID (`KBD` コマンド / `VER(2)` 用)。
-    /// 0 = US, 1 = JA。`KBD n` は `!!n` で正規化される。実機はフラッシュへ
-    /// 永続化するが本移植はメモリ内のみ。
+    /// 0 = US, 1 = JA。デフォルトは JA。`KBD n` は `!!n` で正規化される。
+    /// 実機はフラッシュへ永続化するが本移植はメモリ内のみ。
     pub(crate) keyboard_id: u8,
     /// 現在押下中のキー (BTN() 用)。ASCII コードで索引する押下フラグ。
     /// ホストがキー押下/解放ごとに [`Machine::key_set_down`] で更新する。
@@ -205,7 +205,7 @@ impl Machine {
             key_kana_buf_1: 0,
             key_flg_esc: 0,
             keybuf: VecDeque::with_capacity(128),
-            keyboard_id: 0,
+            keyboard_id: 1,
             keys_down: [false; 256],
             program_running: false,
             noresmode: false,
