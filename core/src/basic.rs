@@ -131,7 +131,7 @@ impl Machine {
     fn handle_statement_terminator(&mut self) -> Option<BasicResult> {
         // LIST 領域では、ステートメントは偶数バイトに揃えられ、奇数位置に
         // 終端 NULL がある。偶数 PC で NULL に当たった場合 (= パディング NULL)
-        // は +1 して実際の終端へ進める (C 版 AddrIsOdd 相当)。
+        // は +1 して実際の終端へ進める。
         if self.pc_in_list() && (self.pc & 1) == (OFFSET_RAM_LIST & 1) {
             self.pc += 1;
         }

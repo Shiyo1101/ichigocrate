@@ -412,7 +412,7 @@ impl Machine {
     /// 実際の代入は入力確定後に [`Machine::input_complete`] が行う。ここでは
     /// プロンプトを出し、代入先を `input_pending` に記録して入力待ち状態へ
     /// 遷移するだけ。`pc` は INPUT 文の直後を指すため、入力確定後はそのまま
-    /// 実行を継続できる (C 版 `IJB_DONT_LOOP` の `command_input` 相当)。
+    /// 実行を継続できる。
     pub(super) fn command_input(&mut self) -> BResult<()> {
         let t = self.token_get();
         let target = if t.code == TOKEN_STRING {
@@ -863,11 +863,11 @@ impl Machine {
     }
 
     /// RENUM [start[,step]]: 行番号を `start` から `step` 刻みで振り直し、
-    /// GOTO/GOSUB の数値リテラル参照もあわせて書き換える (basic.h:2481)。
+    /// GOTO/GOSUB の数値リテラル参照もあわせて書き換える。
     ///
     /// 桁数の制約: 新しい番号の桁数が元の桁数より大きい場合、行内に詰め直す
-    /// 余地がないため `Illegal argument` を返す (C 実装は align 1byte ぶんだけ
-    /// シフトを試みるが、本移植ではその複雑さを避けて拒否で統一する)。
+    /// 余地がないため `Illegal argument` を返す (本移植では桁を詰め直す
+    /// シフトは行わず、拒否で統一する)。
     pub(super) fn command_renum(&mut self) -> BResult<()> {
         let mut start = 10i16;
         if self.token_get_char() != 0 {
@@ -951,7 +951,6 @@ impl Machine {
                         let digit_end = self.pc;
                         let oldnum = next.value;
                         // 新しい番号 = start + (oldnum 未満の行数) * step
-                        // (C: list_findIndex(oldnum) と等価)
                         let cnt = lines.iter().take_while(|(n, _)| *n < oldnum).count() as i16;
                         let newnum = start.wrapping_add(cnt.wrapping_mul(step));
                         if let Err(e) = self.write_decimal_in_place(digit_start, digit_end, newnum)

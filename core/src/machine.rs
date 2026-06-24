@@ -1,5 +1,5 @@
 // Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
-// 元 C 実装の以下を統合:
+// 移植元:
 // https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/vars.h
 // https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/random.h
 // https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/basic.h
@@ -25,8 +25,7 @@ pub enum BasicResult {
     /// 行番号付き入力により LIST が編集された (`OK` は表示しない)
     Edit,
     /// `INPUT` 文がプロンプトを表示し、対話入力待ちに入った。ホストは 1 行
-    /// 入力させたあと [`Machine::input_complete`] を呼び、実行を再開させる
-    /// (C 版 `IJB_DONT_LOOP` の `BASIC_RESULT_INPUT` 相当)。
+    /// 入力させたあと [`Machine::input_complete`] を呼び、実行を再開させる。
     Input,
 }
 
@@ -617,7 +616,7 @@ impl Machine {
 
     /// 対話入力で得た 1 行 (`line`) を `INPUT` の代入先へ反映し、入力待ちを
     /// 解除する。`line` は IchigoJam 文字コードの生バイト列で、式として評価
-    /// した結果を変数へ代入する (C 版 `command_input2` 相当)。
+    /// した結果を変数へ代入する。
     ///
     /// 評価には LINEBUF を一時利用するため、呼出前の LINEBUF 内容・トークナイザ
     /// 状態・`pc` を退避して評価後に復元する。これにより、即時モードで

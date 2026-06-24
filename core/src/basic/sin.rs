@@ -1,7 +1,7 @@
 // Copyright 2014-2024 the IchigoJam authors. All rights reserved. MIT license.
 // https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/basic.h
 
-//! 整数 sin テーブル (basic.h の `sin360` をそのまま移植)。
+//! 整数 sin テーブル。
 //!
 //! 入力は度数。出力は -256..=256。0 度は厳密に 0 を返す。
 

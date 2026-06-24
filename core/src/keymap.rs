@@ -3,13 +3,13 @@
 
 //! HID キーコード → ASCII 変換テーブル (US/JA 両配列)。
 //!
-//! 元 C 実装 `HID_KEYCODE_TO_ASCII_US` / `HID_KEYCODE_TO_ASCII_JA` を
+//! US/JA の HID キーコード → ASCII 変換表を
 //! `[[u8; 4]; 128]` (列: plain / shift / alt / alt+shift) でそのまま保持する。
 //! ホストは `Machine::keymap_lookup` 経由で `keyboard_id` に応じた表を引く。
 
 use crate::keycodes as kc;
 
-// 元 C コードに合わせた制御コード別名 (本表内のみで使用)。
+// 制御コード別名 (本表内のみで使用)。
 const RETURN: u8 = b'\n';
 const SFTSP: u8 = 14;
 const SFTRET: u8 = 16;

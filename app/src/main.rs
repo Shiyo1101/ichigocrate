@@ -762,10 +762,9 @@ fn is_edit_control_code(c: u8) -> bool {
 }
 
 /// egui の物理キーを USB HID Keyboard Usage ID へ変換する。
-/// 元 C 実装 `IchigoJam_P/src/hid.h` の `HID_KEYCODE_TO_ASCII_*` の
-/// 添字と一致させる (例: 数字 2 キー = 0x1f、`[` キー = 0x2f)。
-/// physical_key を引いて KBD コマンドの US/JA 切替を OS レイアウトに
-/// 依らず効かせるための入り口。
+/// 添字は HID Keyboard Usage ID に一致させる (例: 数字 2 キー = 0x1f、
+/// `[` キー = 0x2f)。physical_key を引いて KBD コマンドの US/JA 切替を
+/// OS レイアウトに依らず効かせるための入り口。
 fn egui_key_to_hid(k: Key) -> Option<u8> {
     Some(match k {
         // 英字: A=0x04 … Z=0x1d
