@@ -1,12 +1,11 @@
 # ichigojam-rs
 
-IchigoJam BASICの C ファームウェアを Rust に書き換え、デスクトップ向け GUI アプリ化したもの。
-
-> IchigoJam は [株式会社jig.jp](https://www.jig.jp/) の登録商標です。
+IchigoJam BASIC (子供向け教育用コンピュータ) の C ファームウェアを Rust に
+書き換え、デスクトップ向け GUI アプリ化したもの。
 
 ## 構成
 
-```worktree
+```
 ichigojam-rs/
 ├── core/                 # no_std 可能な BASIC インタプリタ本体
 │   ├── src/
@@ -17,10 +16,11 @@ ichigojam-rs/
 │   │   ├── psg.rs        # MML プレイヤ
 │   │   ├── ram.rs        # RAM レイアウト定数
 │   │   ├── keycodes.rs   # 制御コード/キーコード定数 (画面・入力・BTN 共通)
+│   │   ├── keymap.rs     # HID キーコード → ASCII 変換表 (US/JA)
 │   │   ├── tokens.rs     # トークン定義 (v1.4.3)
 │   │   ├── errors.rs     # エラーメッセージ
 │   │   └── font.rs       # 日本語フォント (256 文字 × 8x8)
-│   └── tests/            # smoke + programs テスト
+│   └── tests/            # 機能別結合テスト (common ヘルパー共有)
 └── app/                  # egui デスクトップフロントエンド
     └── src/main.rs
 ```
@@ -69,10 +69,17 @@ LIST 領域のバイナリを直接読み書きする。
 **実装済み**
 
 - BASIC コア言語 (PRINT, LET, IF/THEN/ELSE, FOR/NEXT, GOTO/GOSUB/RETURN,
-  GOSUB/RTN/GSB エイリアス, REM, INPUT (簡易), LIST, NEW, RUN, END,
-  STOP, CONT, RENUM (簡易), HELP, OK, CLV, CLS, CLT, CLK, CLP,
+  GOSUB/RTN/GSB エイリアス, REM, INPUT, LIST, NEW, RUN, END,
+  STOP, CONT, RENUM, HELP, OK, CLV, CLS, CLT, CLK, CLP,
   CLO, LED, OUT (no-op), POKE, COPY, LOCATE, SCROLL, WAIT, DRAW, BEEP,
   PLAY, TEMPO, SRND, VIDEO)
+- INPUT — 対話入力対応。プロンプト (`"文字列",` または既定の `?`) を表示して
+  実行を中断し、1 行入力を式として評価して変数/配列要素へ代入する。ホストは
+  `Machine::is_awaiting_input` で待機を検知し、確定行を `input_complete` へ渡す。
+  空入力やパース不能な入力は代入をスキップし、変数は元の値を保つ
+- RENUM — 行番号の振り直しに加え、GOTO/GOSUB の数値リテラル参照も新しい
+  行番号へ書き換える。新番号の桁数が元の桁数を超えて行内に収まらない場合は
+  `Illegal argument`
 - 式評価 (算術、ビット演算、論理演算、比較、優先順位 5 段階)
 - 関数 (ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS,
   SOUND, ANA (no-op), BTN (キーボード代用), IN (no-op), SCR, VPEEK, POINT,
@@ -85,7 +92,10 @@ LIST 領域のバイナリを直接読み書きする。
 - 日本語フォント (ichigojam-jp.fnt)
 - VRAM 文字描画 + PCG (書換可能キャラクタ) + ピクセル描画 (DRAW)
 - 実時間ベースの WAIT (ディスプレイ周波数に依存せず正確に N/60 秒待機)
-- egui キーボード入力 (テキスト + 矢印 + Backspace + Delete + Home/End)
+- egui キーボード入力 — 物理キー位置 (`Event::Key.physical_key`) を USB HID
+  Usage ID へ変換し、`keymap` の US/JA 表 (元 C ファーム `hid.h` 由来) を
+  引いて IchigoJam 内部コードに翻訳する。OS のレイアウト変換を経由しない
+  ため `KBD` コマンドの効果が実入力に反映される
 - 大文字自動変換 (CAPS デフォルト ON)
 - 行編集は挿入モード (IchigoJam 標準。文字間にカーソルを置いて入力すると
   後続文字を上書きせず挿入)。プログラム実行中の画面出力は上書きモード
@@ -113,16 +123,17 @@ LIST 領域のバイナリを直接読み書きする。
   `BTN(-1)` は押下中キーのビットマスク
   (bit0:← 1:→ 2:↑ 3:↓ 4:スペース 5:X)
 - KBD コマンド (Ver1.5) — `KBD n` でキーボードレイアウト ID を切替
-  (0:US、それ以外:JA)。実機はフラッシュへ永続化するが本移植はメモリ内のみ。
-  現在値は `VER(2)` で参照可能。トークン番号も v1.5 仕様
-  (KBD=126, DAC=127, IOT.OUT=128, ...) に準拠
+  (0:US、それ以外:JA)。`keymap` が引く表が即時切替わり、物理キー位置から
+  の文字解釈が US/JA で変わる (例: 日本語キーボードで Shift+2 を打つと
+  `KBD 0` では `@`、`KBD 1` では `"`)。現在値は `VER(2)` で参照可能。
+  実機はフラッシュへ永続化するが本移植はメモリ内のみ。トークン番号も
+  v1.5 仕様 (KBD=126, DAC=127, IOT.OUT=128, ...) に準拠
 
 **未実装 (スコープ外)**
 
 - IoT 拡張 (IOT.IN / IOT.OUT)
 - 多言語フォント (中国語、ベトナム語、モンゴル語)
 - I2C 通信
-- USB キーボード固有のキーコード変換
 - UART
 - PWM / DAC コマンド
 - VIDEO の clkdiv 引数 (省電力時のクロック分周は実機固有のため読み飛ばし)
@@ -133,9 +144,21 @@ LIST 領域のバイナリを直接読み書きする。
 cargo test -p ichigojam-core
 ```
 
-- `tests/smoke.rs` (45 件): 構文・REPL 編集・カーソル・カナ入力・BTN・
-  グラフィック文字 (128-255) のバイト保持・CHR$/HEX$/BIN$/DEC$ 境界・
-  POKE→VPEEK の全バイト範囲ラウンドトリップ など
+テストは機能ごとにファイル分割し、共通ヘルパー (`screen_text` / `vram_line`
+/ `var`) は `tests/common/mod.rs` に集約している (計 88 件)。
+
+- `tests/print.rs` (9 件): PRINT 出力と数値/文字列フォーマット
+  (HEX$/BIN$/DEC$)
+- `tests/editor.rs` (15 件): カーソル移動・編集モード・行編集/LIST・
+  VIDEO モード切替・KBD の US/JA テーブル切替
+- `tests/graphics.rs` (15 件): グラフィック文字 (128-255) のバイト保持・
+  CHR$ 境界・POKE→VPEEK の全バイト範囲ラウンドトリップ
+- `tests/commands.rs` (17 件): 代入/CLS/BTN/NEW/CLV/CLK/CLT/CLP/LED/
+  SRND/SCROLL/COPY/BEEP/PLAY/OK の挙動
+- `tests/control_flow.rs` (7 件): FOR/NEXT・GOTO/IF・@LABEL ジャンプ・
+  END/STOP・CONT
+- `tests/input.rs` (5 件): INPUT の対話入力 (入力待ち・式評価・空入力・中断)
+- `tests/renum.rs` (4 件): RENUM の再採番と GOTO/GOSUB 参照書換
 - `tests/programs.rs` (16 件): GOSUB/RETURN、フィボナッチ、ネスト IF/ELSE、
   WAIT+GOTO 協調的待機、SAVE/LOAD ラウンドトリップ (グラフィック文字含む)、
   LIST 表示でのバイト透過、DRAW の引数別経路、PEEK/POKE
