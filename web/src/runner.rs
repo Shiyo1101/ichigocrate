@@ -1,4 +1,4 @@
-//! `<canvas>` へ 1bpp 画面を blit しながら VM を駆動する受動ランナー本体。
+//! `<canvas>` へ白黒画面をそのまま転送しながら VM を駆動する受動ランナー本体。
 
 use ichigojam_core::{
     exec_line, exec_line_bytes, keycodes as kc,
@@ -125,7 +125,6 @@ impl IchigoJamRunner {
             self.next_tick_ms = now_ms;
         }
 
-        // WAIT 期限チェック (期限到来で解除)。
         if let Some(deadline) = self.wait_until_ms {
             if now_ms >= deadline {
                 self.wait_until_ms = None;
@@ -149,7 +148,6 @@ impl IchigoJamRunner {
         // 行わないと、コマンド実行後に次のキー入力まで点滅カーソルが出ない
         self.sync_before_input();
 
-        // 画面出力の差分を onPrint へ流す (登録時のみ)。
         self.collect_output();
 
         let blink = ((now_ms - self.start_ms) / 333.0) as u32;
@@ -192,7 +190,6 @@ impl IchigoJamRunner {
                 }
                 return;
             }
-            // F10: ローマ字 → 半角カナ変換のオン/オフ。
             "F10" => {
                 self.machine.toggle_kana();
                 return;
@@ -448,7 +445,6 @@ impl IchigoJamRunner {
         }
     }
 
-    /// キー入力処理の前にマシン状態をフレームの実行状況へ同期する。
     fn sync_before_input(&mut self) {
         self.machine.program_running = self.running;
         if !self.running {
@@ -503,7 +499,6 @@ impl IchigoJamRunner {
         }
     }
 
-    /// 1bpp 画面を描いて canvas へ転送する。
     fn render(&mut self, blink_phase: u32) {
         let state = RenderState::capture(&self.machine, blink_phase);
         render_mono(&mut self.mono, &self.machine, &state);

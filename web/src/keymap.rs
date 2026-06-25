@@ -46,7 +46,6 @@ pub(crate) fn fkey_binding(code: &str) -> Option<(&'static str, bool)> {
 /// 物理キー位置で keymap を引いて KBD の US/JA 切替を OS 非依存にする入り口。
 pub(crate) fn code_to_hid(code: &str) -> Option<u8> {
     Some(match code {
-        // 英字: KeyA=0x04 … KeyZ=0x1d
         "KeyA" => 0x04,
         "KeyB" => 0x05,
         "KeyC" => 0x06,
@@ -73,7 +72,6 @@ pub(crate) fn code_to_hid(code: &str) -> Option<u8> {
         "KeyX" => 0x1b,
         "KeyY" => 0x1c,
         "KeyZ" => 0x1d,
-        // 数字行: Digit1=0x1e … Digit9=0x26、Digit0=0x27
         "Digit1" => 0x1e,
         "Digit2" => 0x1f,
         "Digit3" => 0x20,

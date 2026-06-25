@@ -1,7 +1,7 @@
 //! IchigoJam-RS の WebAssembly フロントエンド。
 //!
 //! eframe/egui は載せず、`ichigojam-core` の VM を直接駆動して `<canvas>` の 2D
-//! コンテキストへ 1bpp 画面を blit する軽量ランナー。JS 側 (React ラッパや素の
+//! コンテキストへ白黒画面をそのまま転送する軽量ランナー。JS 側 (React ラッパや素の
 //! HTML) が `requestAnimationFrame` ごとに [`IchigoJamRunner::tick`] を、キーイベント
 //! ごとに [`IchigoJamRunner::on_key`] を呼ぶ受動オブジェクトとして設計する。これにより
 //! 1 ページに複数インスタンスを貼ってもグローバル状態を共有しない。
