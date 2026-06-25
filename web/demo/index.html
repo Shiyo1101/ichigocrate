@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IchigoJam-RS (wasm)</title>
+    <style>
+      body {
+        background: #111;
+        color: #ccc;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 24px;
+      }
+      /* 論理 256x192 を 3 倍に拡大。ドットを保つため pixelated。 */
+      #screen {
+        width: 768px;
+        height: 576px;
+        image-rendering: pixelated;
+        background: #000;
+        border: 8px solid #333;
+        outline: none;
+      }
+      p {
+        max-width: 768px;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      kbd {
+        background: #333;
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>IchigoJam-RS (WebAssembly)</h1>
+    <!-- tabindex でフォーカス可能にし、キーイベントを canvas に集約する。 -->
+    <canvas id="screen" tabindex="0"></canvas>
+    <p>
+      クリックでフォーカスしてからタイプして下さい。例:
+      <kbd>PRINT "HELLO"</kbd> → <kbd>Enter</kbd>、<kbd>F5</kbd> で RUN。
+      行番号付きで <kbd>10 PRINT "HI"</kbd> / <kbd>20 GOTO 10</kbd> と打ち
+      <kbd>F5</kbd>、<kbd>ESC</kbd> で中断。
+    </p>
+
+    <script type="module">
+      import init, { IchigoJamRunner } from "../pkg/ichigojam_web.js";
+
+      await init();
+
+      const canvas = document.getElementById("screen");
+      const runner = new IchigoJamRunner(canvas);
+      // デモ用: コンソールから命令ハンドル (type/exec/run/getScreenText 等) を試せる。
+      window.runner = runner;
+      canvas.focus();
+
+      // rAF ごとに 1 フレーム進める。performance.now() を時間基準に渡す。
+      // 実機 LED の代わりに、点灯中は画面枠を赤くする (native 版と同じ表現)。
+      function frame(t) {
+        runner.tick(t);
+        canvas.style.borderColor = runner.is_led() ? "#e62828" : "#333";
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+
+      // ブラウザ既定動作 (スクロール/リロード/フォーカス移動) と衝突するキーは
+      // canvas にフォーカスがある間だけ抑止する。
+      const PREVENT = new Set([
+        "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown",
+        "Space", "Tab", "Enter", "Backspace",
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10",
+      ]);
+
+      canvas.addEventListener("keydown", (e) => {
+        // Ctrl/Cmd 併用 (コピー等) は OS/ブラウザに委ねる。
+        if (e.ctrlKey || e.metaKey) return;
+        runner.on_key(e.code, e.shiftKey, e.altKey, true);
+        if (PREVENT.has(e.code)) e.preventDefault();
+      });
+      canvas.addEventListener("keyup", (e) => {
+        runner.on_key(e.code, e.shiftKey, e.altKey, false);
+      });
+    </script>
+  </body>
+</html>
