@@ -21,15 +21,60 @@ ichigojam-rs/
 │   │   ├── errors.rs     # エラーメッセージ
 │   │   └── font.rs       # 日本語フォント (256 文字 × 8x8)
 │   └── tests/            # 機能別結合テスト (common ヘルパー共有)
-└── app/                  # egui デスクトップフロントエンド
-    └── src/main.rs
+├── app/                  # egui デスクトップフロントエンド
+│   └── src/main.rs
+└── web/                  # WebAssembly フロントエンド (eframe 不使用・軽量)
+    ├── src/lib.rs        # IchigoRunner: core を直接駆動し canvas へ blit
+    ├── build.sh          # wasm ビルド + wasm-bindgen (--target web)
+    └── demo/index.html   # 単体デモページ
 ```
 
+`core` の描画は `render.rs` (1bpp ビットマップ生成) に集約され、デスクトップ
+(egui) と Web (canvas 2D) の両フロントエンドが同じラスタライズ結果を共有する。
+
 ## ビルドと実行
+
+### デスクトップ (ネイティブ)
 
 ```bash
 cargo run --release -p ichigojam-app
 ```
+
+### Web (WebAssembly)
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.121   # Cargo.lock と同一版
+cd ichigojam-rs/web && ./build.sh                  # pkg/ に wasm + JS グルー生成
+python3 -m http.server                             # http://localhost:8000/demo/
+```
+
+ビルド成果物 (`pkg/`) は ES モジュールとして `import` でき、React ラッパや CDN
+配布の土台になる。wasm サイズは ~110KB (eframe を載せないため軽量)。
+
+#### 外部制御 API (`IchigoJamHandle`)
+
+`IchigoJamRunner` は描画/キー入力に加え、JS/TS から実行・入力・状態取得を行う命令
+ハンドルを公開する (React ではこの面を `IchigoJamHandle` という ref 型で露出する)。
+`core` の公開関数へ委譲する薄いブリッジで、実行中プログラムも外部から駆動できる。
+
+```js
+const r = new IchigoJamRunner(canvas);
+r.exec("PRINT 1+2"); // 1 行を直接実行 (停止中のみ)
+r.loadProgram('10 ?"HI"\n20 GOTO 10');
+r.run(); // RUN。無限ループはフレーム実行へ委譲
+r.type("LIST\n"); // キーボード入力と同等 (実行中は INKEY/INPUT へ)
+r.keyDown(28);
+r.keyUp(28); // BTN()/INKEY() 用 物理キー (28=←)
+r.stop(); // ESC 注入で中断
+r.getScreenText(); // 画面スナップショット
+r.getVar("A"); // 変数 A-Z
+r.peek(0x900); // メモリ読み取り
+```
+
+実行モデル上、無限ループが常態なので「`exec()` の戻りで完了を待つ」設計は採らず、
+即時文は同期完了・`RUN` 等はフレーム分割実行へ委譲する。実行中は `type`/`keyDown`/
+`stop` のみ有効 (`exec`/`run` は停止中のみ受理) で、フレーム途中に割り込まない。
 
 ### キーボードショートカット (IchigoJam 標準準拠)
 
