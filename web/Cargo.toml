@@ -11,7 +11,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 ichigojam-core = { path = "../core" }
 wasm-bindgen = "0.2"
+js-sys = "0.3"
 console_error_panic_hook = "0.1"
+base64 = "0.22"
 
 [dependencies.web-sys]
 version = "0.3"
@@ -21,4 +23,5 @@ features = [
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
     "ImageData",
+    "Storage",
 ]
