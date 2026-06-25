@@ -24,9 +24,16 @@ ichigojam-rs/
 ├── app/                  # egui デスクトップフロントエンド
 │   └── src/main.rs
 └── web/                  # WebAssembly フロントエンド (eframe 不使用・軽量)
-    ├── src/lib.rs        # IchigoRunner: core を直接駆動し canvas へ blit
+    ├── src/
+    │   ├── lib.rs        # クレート docs + モジュール宣言 + 再エクスポート
+    │   ├── runner.rs     # IchigoJamRunner: core を直接駆動し canvas へ blit
+    │   ├── keymap.rs     # KeyboardEvent.code → HID/BTN コード変換
+    │   ├── output.rs     # onPrint 用の VRAM 差分ヘルパ
+    │   └── storage.rs    # WebStorage: SAVE/LOAD/FILES の localStorage 実装
     ├── build.sh          # wasm ビルド + wasm-bindgen (--target web)
-    └── demo/index.html   # 単体デモページ
+    └── demo/
+        ├── index.html    # 単体デモページ (マークアップ + スタイル)
+        └── main.js       # wasm 初期化・rAF ループ・キーイベント配線
 ```
 
 `core` の描画は `render.rs` (1bpp ビットマップ生成) に集約され、デスクトップ
@@ -59,7 +66,8 @@ python3 -m http.server                             # http://localhost:8000/demo/
 `core` の公開関数へ委譲する薄いブリッジで、実行中プログラムも外部から駆動できる。
 
 ```js
-const r = new IchigoJamRunner(canvas);
+// storagePrefix と persist は省略可 (既定 ""/true)。
+const r = new IchigoJamRunner(canvas, "demo-1", true);
 r.exec("PRINT 1+2"); // 1 行を直接実行 (停止中のみ)
 r.loadProgram('10 ?"HI"\n20 GOTO 10');
 r.run(); // RUN。無限ループはフレーム実行へ委譲
@@ -70,11 +78,23 @@ r.stop(); // ESC 注入で中断
 r.getScreenText(); // 画面スナップショット
 r.getVar("A"); // 変数 A-Z
 r.peek(0x900); // メモリ読み取り
+r.onPrint((chunk) => (out += chunk)); // 画面出力ストリーミング購読
+r.is_led(); // LED 点灯状態 (枠表示などフロント側で反映)
 ```
 
 実行モデル上、無限ループが常態なので「`exec()` の戻りで完了を待つ」設計は採らず、
 即時文は同期完了・`RUN` 等はフレーム分割実行へ委譲する。実行中は `type`/`keyDown`/
 `stop` のみ有効 (`exec`/`run` は停止中のみ受理) で、フレーム途中に割り込まない。
+
+#### ストレージと出力
+
+- **SAVE/LOAD/FILES**: `core::machine::Storage` を Web 実装 (`WebStorage`) で差し替え。
+  `persist=true` は localStorage (`{prefix}slot_NN` に base64 保存)、`persist=false`
+  はセッション内のみの揮発メモリ。`storagePrefix` で複数インスタンスのスロットを
+  分離する (同一オリジンでの共有を防ぐ)。リロード後もスロット内容は残る。
+- **onPrint**: core を改変せず VRAM 差分で画面出力を近似ストリーミングする。1 フレーム
+  内に画面外へスクロールし切った行や LOCATE で上書きした出力は取りこぼし得るため、
+  確実な全画面状態は `getScreenText()` を併用する。
 
 ### キーボードショートカット (IchigoJam 標準準拠)
 
