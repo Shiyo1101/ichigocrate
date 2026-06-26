@@ -393,6 +393,12 @@ impl Machine {
 
     // ---- エラー ----
 
+    /// 直近の停止理由がエラー (または ESC ブレーク) だった場合の [`BasicError`]。
+    /// `basic_start` 成功で `None` に戻る。ホストが構造化エラー通知に使う。
+    pub fn last_error(&self) -> Option<BasicError> {
+        self.last_error
+    }
+
     /// 停止理由 `e` を画面に表示する。実行ループが `Err` を捕捉した時点で
     /// 1 度だけ呼ぶ。`noresmode` 中は何も表示しない。
     pub fn basic_print_error(&mut self, e: BasicError) {

@@ -4,7 +4,7 @@ use ichigojam_core::{
     exec_line, exec_line_bytes, keycodes as kc,
     ram::IJB_SIZEOF_ARRAY,
     render::{render_mono, RenderState, IMG_H, IMG_W},
-    BasicResult, LineOutcome, Machine, OFFSET_RAM_VRAM, PC_NULL, SIZE_RAM_VRAM,
+    BasicError, BasicResult, LineOutcome, Machine, OFFSET_RAM_VRAM, PC_NULL, SIZE_RAM_VRAM,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::{Clamped, JsCast};
@@ -40,6 +40,8 @@ pub struct IchigoJamRunner {
     input_origin: Option<(i32, i32)>,
     /// onPrint コールバック (画面出力ストリーミング)。未登録なら差分監視も行わない。
     on_print: Option<js_sys::Function>,
+    /// onError コールバック (実行時エラー通知)。即時文・RUN 中の停止理由を構造化して流す。
+    on_error: Option<js_sys::Function>,
     /// onPrint 差分検出用: 直前フレームの VRAM スナップショット。
     prev_vram: Vec<u8>,
     /// onPrint で出力済みの位置 (出力カーソル列・行)。ここから現在のカーソルまでが新規。
@@ -98,6 +100,7 @@ impl IchigoJamRunner {
             start_ms: 0.0,
             input_origin: None,
             on_print: None,
+            on_error: None,
             prev_vram,
             out_x,
             out_y,
@@ -355,6 +358,18 @@ impl IchigoJamRunner {
     pub fn on_print(&mut self, cb: Option<js_sys::Function>) {
         self.on_print = cb;
     }
+
+    /// 実行時エラーのコールバックを登録する。`cb({ code, message })` が、即時文
+    /// (`exec`/`type` の改行確定) または RUN 中のプログラムが停止理由付きで止まった
+    /// ときに呼ばれる。`code` は IchigoJam 標準のエラー番号 (1..=12)、`message` は
+    /// 画面表示と同じ文言。`null`/未指定で解除。
+    ///
+    /// ESC=Break による中断は意図的操作なのでエラーとしては通知しない (画面には
+    /// 従来どおり `Break in NN` が出る)。
+    #[wasm_bindgen(js_name = "onError")]
+    pub fn on_error(&mut self, cb: Option<js_sys::Function>) {
+        self.on_error = cb;
+    }
 }
 
 impl IchigoJamRunner {
@@ -370,7 +385,12 @@ impl IchigoJamRunner {
                 match res {
                     BasicResult::Execute => self.machine.put_str("OK\n"),
                     BasicResult::Input => self.begin_input(),
-                    _ => {}
+                    BasicResult::StopOrErr => {
+                        if let Some(e) = self.machine.last_error() {
+                            self.report_error(e);
+                        }
+                    }
+                    BasicResult::Edit => {}
                 }
                 self.machine.key_flg_esc = 0;
                 break;
@@ -424,7 +444,7 @@ impl IchigoJamRunner {
             Ok(LineOutcome::Executed) => self.finish_executed(),
             Ok(LineOutcome::Edited) => {}
             Ok(LineOutcome::AwaitingInput) => self.begin_input(),
-            Err(_) => {}
+            Err(e) => self.report_error(e),
         }
     }
 
@@ -499,6 +519,21 @@ impl IchigoJamRunner {
         }
     }
 
+    /// 停止理由を構造化して onError へ流す (登録時のみ)。`Break` は意図的中断なので
+    /// 通知しない。
+    fn report_error(&self, e: BasicError) {
+        if e == BasicError::Break {
+            return;
+        }
+        let Some(cb) = self.on_error.clone() else {
+            return;
+        };
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &"code".into(), &JsValue::from(e.code()));
+        let _ = js_sys::Reflect::set(&obj, &"message".into(), &JsValue::from_str(&e.to_string()));
+        let _ = cb.call1(&JsValue::NULL, &obj);
+    }
+
     fn render(&mut self, blink_phase: u32) {
         let state = RenderState::capture(&self.machine, blink_phase);
         render_mono(&mut self.mono, &self.machine, &state);
@@ -554,8 +589,8 @@ impl IchigoJamRunner {
             Ok(LineOutcome::Edited) => {}
             // 即時モードの INPUT。対話入力モードへ移行する。
             Ok(LineOutcome::AwaitingInput) => self.begin_input(),
-            // エラーメッセージは VRAM に書き済 (basic_print_error)。
-            Err(_) => {}
+            // エラーメッセージは VRAM に書き済 (basic_print_error)。onError にも通知。
+            Err(e) => self.report_error(e),
         }
     }
 
