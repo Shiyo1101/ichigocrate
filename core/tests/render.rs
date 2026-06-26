@@ -32,7 +32,7 @@ fn renders_glyph_bits_at_top_left() {
     let glyph = &CHAR_PATTERN_JP[ch as usize * 8..ch as usize * 8 + 8];
     for row in 0..FONT_H {
         for col in 0..FONT_W {
-            let expected = ((glyph[row] >> (7 - col)) & 1) as u8;
+            let expected = (glyph[row] >> (7 - col)) & 1;
             assert_eq!(buf[row * IMG_W + col], expected, "px ({col},{row})");
         }
     }
