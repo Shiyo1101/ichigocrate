@@ -19,6 +19,39 @@ fn line_edit_and_list() {
 }
 
 #[test]
+fn clear_line_then_write_command() {
+    let mut m = Machine::new();
+    // 編集途中の行を画面に作る。
+    for b in b"PRINT 123" {
+        m.screen_putc(*b);
+    }
+    // F キー相当: 行を消してからコマンドを書く。
+    m.screen_clear_line();
+    assert_eq!(m.cursorx, 0);
+    for b in b"LIST" {
+        m.screen_putc(*b);
+    }
+    let line = vram_line(&m, m.cursory as usize);
+    assert_eq!(line, "LIST", "残存テキストが混ざってはいけない");
+}
+
+#[test]
+fn clear_line_handles_wrapped_line() {
+    let mut m = Machine::new();
+    // 1 行 (32 桁) を超える長い入力で折り返しを作る。
+    let long: Vec<u8> = (0..40).map(|i| b'A' + (i % 26)).collect();
+    for b in &long {
+        m.screen_putc(*b);
+    }
+    assert!(m.cursory >= 1, "折り返しで 2 行目に来ているはず");
+    m.screen_clear_line();
+    // 折り返し元の行頭 (0 行目) まで遡って消えていること。
+    assert_eq!((m.cursorx, m.cursory), (0, 0));
+    assert_eq!(vram_line(&m, 0), "");
+    assert_eq!(vram_line(&m, 1), "");
+}
+
+#[test]
 fn video_modes() {
     let mut m = Machine::new();
     // 既定は通常表示 (オン・等倍・非反転)
