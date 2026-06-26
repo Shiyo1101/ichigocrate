@@ -240,7 +240,7 @@ impl IchigoJamRunner {
 ///
 /// **実行モデルの制約:** プログラムは無限ループが常態なので「`exec()` の戻りで完了を
 /// 待つ」設計は採らない。`exec`/`run`/`loadProgram` は **停止中 (REPL) のみ受理**し、
-/// 実行中は `type`/`keyDown`/`stop` だけが有効 (フレーム途中に割り込まない)。
+/// 実行中は `type`/`keyDown`/`break` だけが有効 (フレーム途中に割り込まない)。
 #[wasm_bindgen]
 impl IchigoJamRunner {
     /// 文字列をタイプ入力する (キーボード入力と同等)。実行中は INKEY()/INPUT へ、
@@ -300,8 +300,8 @@ impl IchigoJamRunner {
     }
 
     /// 実行中プログラムを中断する (ESC 相当)。暴走停止に使う。
-    #[wasm_bindgen(js_name = "stop")]
-    pub fn stop(&mut self) {
+    #[wasm_bindgen(js_name = "break")]
+    pub fn break_(&mut self) {
         self.machine.key_flg_esc = 1;
     }
 
@@ -520,7 +520,10 @@ impl IchigoJamRunner {
     }
 
     /// F キーで指定コマンドを VRAM に挿入する。`run` が true なら直ちに実行。
+    /// 本家同様、カーソル行に何が書かれていても消してから書き込むので、
+    /// 編集途中の行があってもコマンドは常に単独で表示・実行される。
     fn type_fkey_command(&mut self, cmd: &str, run: bool) {
+        self.machine.screen_clear_line();
         for b in cmd.bytes() {
             self.machine.screen_putc(b);
         }
