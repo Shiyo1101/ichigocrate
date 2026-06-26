@@ -382,6 +382,32 @@ impl Machine {
         }
     }
 
+    /// 現在カーソルがある論理行を消去し、カーソルを行頭へ移動する。
+    /// F キーのコマンド (LIST/RUN など) は、行に何が書かれていても上書き
+    /// 表示・実行できる必要があるため、書き込み前にこれで行を空にする。
+    /// 折り返しで複数行に跨る論理行は、行末セルが埋まって次行へ continue
+    /// している連続行をまとめて消す。
+    pub fn screen_clear_line(&mut self) {
+        if self.cursory < 0 {
+            return;
+        }
+        let w = self.screenw;
+        let h = self.screenh;
+        // 直前行の末尾セルが埋まっている = 折り返し継続なので行頭まで遡る。
+        let mut top = self.cursory as usize;
+        while top > 0 && self.vram()[top * w - 1] != 0 {
+            top -= 1;
+        }
+        // 自行の末尾セルが埋まっている間は折り返しが続くので下へ伸ばす。
+        let mut bottom = top;
+        while bottom + 1 < h && self.vram()[(bottom + 1) * w - 1] != 0 {
+            bottom += 1;
+        }
+        self.vram_mut()[top * w..(bottom + 1) * w].fill(0);
+        self.cursorx = 0;
+        self.cursory = top as i32;
+    }
+
     // ---- ピクセル描画 (DRAW / POINT) ----
 
     pub fn screen_pset(&mut self, x: i32, y: i32, cmd: i32) -> u32 {
