@@ -90,7 +90,7 @@ impl Machine {
             }
         } else {
             // トークンテーブル検索 (式モードでは予約語の一部のみマッチ)
-            let max = if self.tokenmode != 0 {
+            let max = if self.is_expr_mode {
                 N_TOKEN_EXPRESSION as usize
             } else {
                 N_TOKEN

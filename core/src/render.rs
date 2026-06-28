@@ -21,8 +21,8 @@ pub const IMG_H: usize = SCREEN_H * FONT_H;
 /// 描画結果に影響する VRAM/PCG 以外の状態。フロント側の dirty 判定にも使う。
 #[derive(Clone, PartialEq, Eq)]
 pub struct RenderState {
-    pub invert: bool,
-    pub video: bool,
+    pub is_inverted: bool,
+    pub is_video_enabled: bool,
     /// 拡大段階 (表示倍率は `1 << big`)。
     pub big: u8,
     /// 反転描画されるカーソル: (セル index, 全角なら true)。非表示時は `None`。
@@ -37,7 +37,7 @@ impl RenderState {
     pub fn capture(m: &Machine, blink_phase: u32) -> Self {
         let cols = m.screen_cols();
         let rows = m.screen_rows();
-        let show = m.cursorflg && (blink_phase & 1) == 0;
+        let show = m.is_cursor_visible && (blink_phase & 1) == 0;
         let in_range = m.cursory >= 0
             && (m.cursory as usize) < rows
             && m.cursorx >= 0
@@ -49,8 +49,8 @@ impl RenderState {
             None
         };
         Self {
-            invert: m.screen_invert,
-            video: m.video_enabled,
+            is_inverted: m.is_screen_inverted,
+            is_video_enabled: m.is_video_enabled,
             big: m.screen_big.min(3),
             cursor,
         }
@@ -69,7 +69,7 @@ impl RenderState {
 pub fn render_mono(buf: &mut [u8], machine: &Machine, state: &RenderState) {
     buf.fill(0);
     // VIDEO 0: 映像オフ。VRAM の内容に関わらず消灯画面。
-    if !state.video {
+    if !state.is_video_enabled {
         return;
     }
 
@@ -96,7 +96,7 @@ pub fn render_mono(buf: &mut [u8], machine: &Machine, state: &RenderState) {
                 for col in 0..FONT_W {
                     let bit = (bits >> (7 - col)) & 1 != 0;
                     let mut on = bit;
-                    if state.invert {
+                    if state.is_inverted {
                         on = !on;
                     }
                     // カーソル反転。挿入モードは左半分 (col < 4) のみ反転して

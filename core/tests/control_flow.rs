@@ -88,13 +88,13 @@ fn cont_resumes_from_esc_break() {
             break;
         }
     }
-    m.key_flg_esc = 1;
+    m.is_esc_pressed = true;
     while m.pc != PC_NULL {
         if m.basic_step().is_some() {
             break;
         }
     }
-    m.key_flg_esc = 0;
+    m.is_esc_pressed = false;
     // ESC ブレーク後は pcbreak に位置が記録され、CONT で再開できる。
     // ループ条件 A<100 が成立する限り 10→20 を繰り返し、最後に 30 で DONE。
     let _ = exec_line(&mut m, "CONT");

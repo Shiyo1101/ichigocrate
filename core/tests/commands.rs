@@ -149,14 +149,14 @@ fn clp_resets_pcg_to_font_tail() {
 #[test]
 fn led_command_toggles_led_state() {
     let mut m = Machine::new();
-    assert!(!m.led);
+    assert!(!m.is_led_on);
     let _ = exec_line(&mut m, "LED 1");
-    assert!(m.led);
+    assert!(m.is_led_on);
     let _ = exec_line(&mut m, "LED 0");
-    assert!(!m.led);
+    assert!(!m.is_led_on);
     // 0 以外は ON
     let _ = exec_line(&mut m, "LED 42");
-    assert!(m.led);
+    assert!(m.is_led_on);
 }
 
 /// SRND: 同じシードを与えれば RND は同じ値を返す
@@ -265,12 +265,12 @@ fn play_with_no_arg_stops_mml() {
     assert!(!m.psg_sound());
 }
 
-/// OK 2: noresmode (応答抑制) ON、それ以外は OFF (commands.rs:331)
+/// OK 2: is_quiet_mode (応答抑制) ON、それ以外は OFF (commands.rs:331)
 #[test]
 fn ok_2_enables_quiet_mode() {
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "OK 2");
-    // noresmode は pub(crate) のため公開 API では直接見えない。
+    // is_quiet_mode は pub(crate) のため公開 API では直接見えない。
     // 次の `OK 0` で OFF に戻すことだけ通す動作確認とする。
     let _ = exec_line(&mut m, "OK 0");
 }

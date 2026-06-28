@@ -162,8 +162,8 @@ struct IchigoApp {
     machine: Machine,
     /// VRAM → テクスチャ描画器 (バッファ使い回し + 差分判定で再描画を抑える)
     renderer: Renderer,
-    /// Machine.program_running と同期するホスト側のミラー
-    running: bool,
+    /// Machine.is_program_running と同期するホスト側のミラー
+    is_running: bool,
     shared_tone: Arc<AtomicF32>,
     _audio_stream: Option<cpal::Stream>,
     /// カーソル点滅の基準
@@ -173,7 +173,7 @@ struct IchigoApp {
     /// 実時間ベースの WAIT 終了予定時刻
     wait_until: Option<Instant>,
     /// タイトル更新差分用に持つ直前フレームのカナモード状態
-    last_kana: bool,
+    was_kana_mode: bool,
     /// INPUT 文の対話入力待ち中なら、入力値の開始 VRAM 座標 (プロンプト直後の
     /// cursorx, cursory)。Enter 確定時にこの位置から値テキストを読み取る。
     input_origin: Option<(i32, i32)>,
@@ -197,13 +197,13 @@ impl IchigoApp {
         Self {
             machine,
             renderer: Renderer::new(),
-            running: false,
+            is_running: false,
             shared_tone,
             _audio_stream: audio_stream,
             start_time: now,
             next_tick_time: now,
             wait_until: None,
-            last_kana: false,
+            was_kana_mode: false,
             input_origin: None,
         }
     }
@@ -230,13 +230,13 @@ impl App for IchigoApp {
         process_keyboard(ctx, &mut self.machine);
 
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.machine.key_flg_esc = 1;
+            self.machine.is_esc_pressed = true;
         }
 
         // F キー: run=true は ENTER まで自動投入、false は文字挿入のみ
         // (ユーザが続けてスロット番号等を入力できるよう待機)。
         // INPUT の入力待ち中は値編集を妨げないため無効化する。
-        if !self.running && self.input_origin.is_none() {
+        if !self.is_running && self.input_origin.is_none() {
             let fkey = ctx.input(|i| {
                 FKEY_BINDINGS
                     .iter()
@@ -262,7 +262,7 @@ impl App for IchigoApp {
             self.machine.wait_frames = 0;
         }
 
-        if self.running {
+        if self.is_running {
             // WAIT 中は basic_step を呼ばず実時間の経過を待つ。それ以外は
             // 1 フレームあたり最大 N 文まで進めて UI 凍結を防ぐ。
             if self.wait_until.is_none() {
@@ -272,19 +272,19 @@ impl App for IchigoApp {
                         break; // ステップ中に WAIT が発火 → 次フレームへ
                     }
                     if let Some(res) = self.machine.basic_step() {
-                        self.running = false;
+                        self.is_running = false;
                         match res {
                             BasicResult::Execute => self.machine.put_str("OK\n"),
                             // INPUT 文が入力待ち → 対話入力モードへ。実行再開は
-                            // 入力確定時 (complete_input) に running を立て直す。
+                            // 入力確定時 (complete_input) に is_running を立て直す。
                             BasicResult::Input => self.begin_input(),
                             _ => {}
                         }
-                        self.machine.key_flg_esc = 0;
+                        self.machine.is_esc_pressed = false;
                         break;
                     }
                     if self.machine.pc == PC_NULL {
-                        self.running = false;
+                        self.is_running = false;
                         self.machine.put_str("OK\n");
                         break;
                     }
@@ -292,7 +292,7 @@ impl App for IchigoApp {
             }
         } else if self.input_origin.is_some() {
             // INPUT 入力待ち: ESC で中断、Enter で値を確定して実行再開。
-            if self.machine.key_flg_esc != 0 {
+            if self.machine.is_esc_pressed {
                 self.cancel_input();
             } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
                 self.complete_input();
@@ -310,17 +310,17 @@ impl App for IchigoApp {
         // 再描画するため取りこぼしはない)。ProMotion 等の高リフレッシュレート
         // でもこの間隔が再描画の上限になる。
         let needs_realtime =
-            self.running || self.machine.psg_sound() || self.wait_until.is_some();
+            self.is_running || self.machine.psg_sound() || self.wait_until.is_some();
         ctx.request_repaint_after(if needs_realtime { FRAME } else { IDLE_REPAINT });
 
-        if self.machine.key_kana != self.last_kana {
-            let title = if self.machine.key_kana {
+        if self.machine.is_kana_mode != self.was_kana_mode {
+            let title = if self.machine.is_kana_mode {
                 "IchigoJam BASIC (Rust port) — KANA"
             } else {
                 "IchigoJam BASIC (Rust port)"
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.to_string()));
-            self.last_kana = self.machine.key_kana;
+            self.was_kana_mode = self.machine.is_kana_mode;
         }
 
         // カーソル点滅は実時間 (~333ms 周期) で算出 (リフレッシュ非依存)
@@ -329,7 +329,7 @@ impl App for IchigoApp {
         self.renderer.sync(ctx, &self.machine, cursor_blink_phase);
 
         // 実機 LED の代替: LED 1 で赤い枠、LED 0 で透明
-        let border_color = if self.machine.led {
+        let border_color = if self.machine.is_led_on {
             Color32::from_rgb(230, 40, 40)
         } else {
             Color32::TRANSPARENT
@@ -370,15 +370,15 @@ impl IchigoApp {
     /// キーボード入力を処理する前に、マシン側の状態をフレームの実行状況へ
     /// 同期する。
     ///
-    /// `program_running` を立てることで `input_putc`/`input_control` が実行中の
+    /// `is_program_running` を立てることで `input_putc`/`input_control` が実行中の
     /// 対話編集を無視する。判定に `pc` を使えないのが要点で、`pc` は STOP/ESC
     /// ブレーク後も CONT 用に残るため、停止しても入力が復活しなくなってしまう。
     /// 非実行 (REPL) 中は挿入/上書きモードを同期しカーソルを表示する。
     fn sync_machine_before_input(&mut self) {
-        self.machine.program_running = self.running;
-        if !self.running {
+        self.machine.is_program_running = self.is_running;
+        if !self.is_running {
             self.machine.sync_insert_mode();
-            self.machine.cursorflg = true;
+            self.machine.is_cursor_visible = true;
         }
     }
 
@@ -409,14 +409,14 @@ impl IchigoApp {
         if len == 0 {
             return;
         }
-        self.machine.key_flg_esc = 0;
+        self.machine.is_esc_pressed = false;
         // Machine 借用のため一旦スライスをローカルにコピー
         let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
         match exec_line_bytes(&mut self.machine, &line) {
             Ok(LineOutcome::Executed) => {
                 if self.machine.pc != PC_NULL {
                     // RUN 後など継続実行が必要
-                    self.running = true;
+                    self.is_running = true;
                 } else {
                     self.machine.put_str("OK\n");
                 }
@@ -439,7 +439,7 @@ impl IchigoApp {
     /// 現在のカーソル位置 (プロンプト直後) を入力値の開始位置として記録する。
     fn begin_input(&mut self) {
         self.input_origin = Some((self.machine.cursorx, self.machine.cursory));
-        self.machine.key_flg_esc = 0;
+        self.machine.is_esc_pressed = false;
     }
 
     /// INPUT の入力確定。プロンプト直後から現在のカーソル行末までの VRAM を
@@ -456,7 +456,7 @@ impl IchigoApp {
         let line: Vec<u8> = self.machine.ram[start..start + len].to_vec();
         self.machine.input_complete(&line);
         // pc は INPUT 文の直後を指すので、実行を再開する。
-        self.running = true;
+        self.is_running = true;
     }
 
     /// INPUT 入力中の ESC 中断。代入せずに入力待ちを解除し REPL へ戻る。
@@ -464,7 +464,7 @@ impl IchigoApp {
         self.input_origin = None;
         self.machine.cancel_input();
         self.machine.put_str("OK\n");
-        self.machine.key_flg_esc = 0;
+        self.machine.is_esc_pressed = false;
     }
 }
 
@@ -565,7 +565,7 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
             } = ev
             {
                 // ホスト側で別処理: Enter (REPL 行確定 / 実行中は keybuf)、
-                // ESC (key_flg_esc 立て)、F1-F12 (F キー割当)。
+                // ESC (is_esc_pressed 立て)、F1-F12 (F キー割当)。
                 // keymap は通さない。
                 if matches!(*key, Key::Enter) {
                     if executing {
@@ -599,7 +599,7 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 if is_edit_control_code(c) {
                     // カナモード中の Backspace は未確定バッファ管理のため
                     // input_putc を通す。それ以外の編集キーは input_control。
-                    if c == kc::BACKSPACE && m.key_kana {
+                    if c == kc::BACKSPACE && m.is_kana_mode {
                         m.input_putc(c);
                     } else {
                         m.input_control(c);
@@ -628,7 +628,7 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
 }
 
 /// keymap の代わりにホスト側で別処理するキー。Enter / ESC / F キーは
-/// IchigoApp の他の経路 (`execute_current_line`、`key_flg_esc`、F キー
+/// IchigoApp の他の経路 (`execute_current_line`、`is_esc_pressed`、F キー
 /// 割当) が拾うため、keymap に流すと二重入力になる。
 fn is_host_reserved_key(k: Key) -> bool {
     matches!(

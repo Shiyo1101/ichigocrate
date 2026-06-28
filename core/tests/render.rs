@@ -8,8 +8,8 @@ use ichigojam_core::Machine;
 /// VIDEO 表示 ON・反転/カーソルなしの素の描画状態。
 fn plain() -> RenderState {
     RenderState {
-        invert: false,
-        video: true,
+        is_inverted: false,
+        is_video_enabled: true,
         big: 0,
         cursor: None,
     }
@@ -48,7 +48,7 @@ fn invert_flips_every_pixel() {
         &mut inverted,
         &m,
         &RenderState {
-            invert: true,
+            is_inverted: true,
             ..plain()
         },
     );
@@ -65,7 +65,7 @@ fn video_off_blanks_buffer() {
         &mut buf,
         &m,
         &RenderState {
-            video: false,
+            is_video_enabled: false,
             ..plain()
         },
     );

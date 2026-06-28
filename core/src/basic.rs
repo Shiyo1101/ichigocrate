@@ -29,7 +29,7 @@ impl Machine {
         self.last_error = None;
         self.ngosubstack = 0;
         self.nforstack = 0;
-        self.tokenmode = 0;
+        self.is_expr_mode = false;
         self.pc = commandline_pc;
         self.lasttoken = 0;
         self.lasttokenpc = 0;
@@ -103,10 +103,10 @@ impl Machine {
     pub fn basic_execute(&mut self, commandline_pc: usize) -> BasicResult {
         // プログラム実行中の画面出力 (PRINT 等) は上書きモードに固定する。
         // 対話編集の挿入/上書きはホストが各キー処理前に sync_insert_mode で復元する。
-        self.screen_insertmode = true;
-        // 実行中はカーソルを非表示にする。REPL に戻るとホストが cursorflg を
+        self.is_overwrite_mode = true;
+        // 実行中はカーソルを非表示にする。REPL に戻るとホストが is_cursor_visible を
         // 再び立てる。プログラム側の LOCATE x,y,1 による明示表示は引き続き可能。
-        self.cursorflg = false;
+        self.is_cursor_visible = false;
         self.basic_start(commandline_pc);
         let started_in_list =
             (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&commandline_pc);

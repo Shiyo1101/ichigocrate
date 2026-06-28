@@ -329,13 +329,13 @@ impl Machine {
     }
 
     pub(super) fn command_ok(&mut self) -> BResult<()> {
-        // 引数 2 で「応答抑制 (noresmode)」を有効化。それ以外は解除。
+        // 引数 2 で「応答抑制 (is_quiet_mode)」を有効化。それ以外は解除。
         let mut quiet = false;
         if self.token_get_char() != 0 {
             quiet = self.token_expression()? == 2;
         }
         self.token_end()?;
-        self.noresmode = quiet;
+        self.is_quiet_mode = quiet;
         Ok(())
     }
 
@@ -494,7 +494,7 @@ impl Machine {
 
     pub(super) fn command_led(&mut self) -> BResult<()> {
         let n = self.token_expression()?;
-        self.led = n != 0;
+        self.is_led_on = n != 0;
         self.token_end()
     }
 
@@ -547,9 +547,9 @@ impl Machine {
             let y = self.token_expression()?;
             let code = self.token_get().code;
             if code == TOKEN_COMMA {
-                self.cursorflg = self.token_expression()? != 0;
+                self.is_cursor_visible = self.token_expression()? != 0;
             } else {
-                self.cursorflg = false;
+                self.is_cursor_visible = false;
                 self.token_back();
             }
             (x as i32, y as i32)
@@ -585,7 +585,7 @@ impl Machine {
 
         if video != 0 {
             let video = video.max(0);
-            self.screen_invert = (video & 1) == 0; // VIDEO 2, 4 -> 反転
+            self.is_screen_inverted = (video & 1) == 0; // VIDEO 2, 4 -> 反転
             let big = (((video - 1) >> 1).min(3)) as u8; // VIDEO 3, 4 -> 拡大
             if big != self.screen_big {
                 // 拡大段階が変わると論理画面サイズも変わるため一旦クリアする。
@@ -596,7 +596,7 @@ impl Machine {
                 self.video_on();
             }
         } else {
-            self.video_enabled = false;
+            self.is_video_enabled = false;
         }
         Ok(())
     }
@@ -731,7 +731,7 @@ impl Machine {
             return Err(ERR_FILE_ERROR);
         }
         self.lastfile = n as u8;
-        if !self.noresmode {
+        if !self.is_quiet_mode {
             self.put_str("Saved ");
             self.put_num(listsize as i32);
             self.put_str("byte\n");
@@ -786,7 +786,7 @@ impl Machine {
         self.listsize = index;
         self.lastfile = n as u8;
 
-        if !lrun && !self.noresmode {
+        if !lrun && !self.is_quiet_mode {
             self.put_str("Loaded ");
             self.put_num(index as i32);
             self.put_str("byte\n");
@@ -923,9 +923,9 @@ impl Machine {
         let saved_lasttoken = self.lasttoken;
         let saved_lasttokenpc = self.lasttokenpc;
         let saved_bk = self.bklasttoken;
-        let saved_tokenmode = self.tokenmode;
+        let saved_expr_mode = self.is_expr_mode;
 
-        self.tokenmode = 0;
+        self.is_expr_mode = false;
         let line_start = OFFSET_RAM_LIST + line_idx as usize + 3;
         let line_len = self.list_get_length(line_idx) as usize;
         let line_end = line_start + line_len;
@@ -969,7 +969,7 @@ impl Machine {
         self.lasttoken = saved_lasttoken;
         self.lasttokenpc = saved_lasttokenpc;
         self.bklasttoken = saved_bk;
-        self.tokenmode = saved_tokenmode;
+        self.is_expr_mode = saved_expr_mode;
         result
     }
 

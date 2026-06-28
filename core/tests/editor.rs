@@ -55,33 +55,33 @@ fn clear_line_handles_wrapped_line() {
 fn video_modes() {
     let mut m = Machine::new();
     // 既定は通常表示 (オン・等倍・非反転)
-    assert!(m.video_enabled && !m.screen_invert && m.screen_big == 0);
+    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_big == 0);
 
     // VIDEO 2: 反転、等倍
     let _ = exec_line(&mut m, "VIDEO 2");
-    assert!(m.video_enabled && m.screen_invert && m.screen_big == 0);
+    assert!(m.is_video_enabled && m.is_screen_inverted && m.screen_big == 0);
 
     // VIDEO 3: 拡大 (2 倍)、非反転。論理画面は 16x12 に縮む
     let _ = exec_line(&mut m, "VIDEO 3");
-    assert!(m.video_enabled && !m.screen_invert && m.screen_big == 1);
+    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_big == 1);
     assert_eq!((m.screen_cols(), m.screen_rows()), (16, 12));
 
     // VIDEO 4: 拡大反転
     let _ = exec_line(&mut m, "VIDEO 4");
-    assert!(m.video_enabled && m.screen_invert && m.screen_big == 1);
+    assert!(m.is_video_enabled && m.is_screen_inverted && m.screen_big == 1);
 
     // VIDEO 1: 通常に戻る (32x24)
     let _ = exec_line(&mut m, "VIDEO 1");
-    assert!(m.video_enabled && !m.screen_invert && m.screen_big == 0);
+    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_big == 0);
     assert_eq!((m.screen_cols(), m.screen_rows()), (32, 24));
 
     // VIDEO 0: 表示オフ (倍率・反転は据え置き)
     let _ = exec_line(&mut m, "VIDEO 0");
-    assert!(!m.video_enabled);
+    assert!(!m.is_video_enabled);
 
     // clkdiv 引数付きでも構文エラーにならない
     let _ = exec_line(&mut m, "VIDEO 1,8");
-    assert!(m.video_enabled);
+    assert!(m.is_video_enabled);
 }
 
 #[test]
@@ -119,19 +119,19 @@ fn interactive_typing_inserts() {
 #[test]
 fn cursor_hidden_during_execution() {
     let mut m = Machine::new();
-    m.cursorflg = true; // REPL 編集中はカーソル表示
+    m.is_cursor_visible = true; // REPL 編集中はカーソル表示
     let _ = exec_line(&mut m, "?1");
     // コマンド/プログラム実行を始めるとカーソルは非表示になる
-    assert!(!m.cursorflg);
+    assert!(!m.is_cursor_visible);
 }
 
 #[test]
 fn locate_can_show_cursor_during_execution() {
     let mut m = Machine::new();
-    m.cursorflg = false;
+    m.is_cursor_visible = false;
     // プログラム側の LOCATE x,y,1 によるカーソル表示制御は引き続き可能
     let _ = exec_line(&mut m, "LOCATE 3,4,1");
-    assert!(m.cursorflg);
+    assert!(m.is_cursor_visible);
 }
 
 #[test]
@@ -140,9 +140,9 @@ fn no_edit_or_cursor_move_during_execution() {
     let _ = exec_line(&mut m, "10 WAIT 600");
     let _ = exec_line(&mut m, "RUN");
     // ホスト (アプリ) は実行ループ中フラグを立てる。カーソルは非表示
-    m.program_running = true;
+    m.is_program_running = true;
     assert!(m.is_executing());
-    assert!(!m.cursorflg);
+    assert!(!m.is_cursor_visible);
 
     let before = (m.cursorx, m.cursory);
     let cell_before = m.screen_get(m.cursorx, m.cursory);
@@ -164,12 +164,12 @@ fn input_works_after_break_even_if_pc_retained() {
     let _ = exec_line(&mut m, "10 WAIT 600");
     let _ = exec_line(&mut m, "RUN");
     // RUN 中: pc は LIST 内、ホストは実行中フラグを立てている
-    m.program_running = true;
+    m.is_program_running = true;
     assert_ne!(m.pc, PC_NULL, "RUN で pc が LIST 内に入る");
 
     // ESC ブレーク相当: ホストが停止を検知して実行中フラグを下ろす。
     // pc は CONT 用に保持されたまま (非 PC_NULL) になる。
-    m.program_running = false;
+    m.is_program_running = false;
     assert_ne!(m.pc, PC_NULL, "停止後も pc は CONT 用に保持される");
 
     // 回帰テスト: pc が残っていても、停止後は入力が効くこと。

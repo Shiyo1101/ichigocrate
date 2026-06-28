@@ -12,12 +12,12 @@ use crate::tokens::*;
 
 impl Machine {
     pub fn token_expression(&mut self) -> BResult<i16> {
-        self.tokenmode = 1;
+        self.is_expr_mode = true;
         self.lasttokenpc = 0;
-        // tokenmode は途中でエラーになっても必ず 0 へ戻す必要があるため、
+        // is_expr_mode は途中でエラーになっても必ず 0 へ戻す必要があるため、
         // 本体を内部関数に分け、成否に関わらず後始末する。
         let result = self.token_expression_inner();
-        self.tokenmode = 0;
+        self.is_expr_mode = false;
         self.lasttokenpc = 0;
         result
     }

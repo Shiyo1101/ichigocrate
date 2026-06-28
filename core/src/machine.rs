@@ -53,23 +53,24 @@ pub struct Machine {
     // ===== スクリーン状態 (ホストが描画時に読む) =====
     pub cursorx: i32,
     pub cursory: i32,
-    pub cursorflg: bool,
-    pub screen_invert: bool,
+    pub is_cursor_visible: bool,
+    pub is_screen_inverted: bool,
     /// 拡大表示の段階 (VIDEO 3/4 で 1 以上)。表示倍率は `1 << screen_big`。
     /// 0 = 等倍, 1 = 2 倍, 2 = 4 倍, 3 = 8 倍 (最大 3 でクリップ)。
     pub screen_big: u8,
     /// 映像出力の有効/無効 (VIDEO 0 でオフ)。ホストはオフ時に黒画面を描画する。
-    pub video_enabled: bool,
+    pub is_video_enabled: bool,
 
     // ===== キーボード関連 (ホストが書く) =====
-    pub key_kana: bool,
-    pub key_flg_esc: i8,
+    pub is_kana_mode: bool,
+    /// ESC による中断要求が立っているか。実行ループの停止判定に使う。
+    pub is_esc_pressed: bool,
 
     // ===== タイマ (ホストが 60Hz で更新) =====
     pub frames: u16,
 
     // ===== I/O 状態 (ホストが LED 枠線色決定で読む) =====
-    pub led: bool,
+    pub is_led_on: bool,
 
     // ===== サウンド出力 (UI/Audio スレッド連携) =====
     /// 現在の周波数 (Hz)。0 なら無音。
@@ -93,15 +94,18 @@ pub struct Machine {
     pub(crate) nforstack: u8,
     pub(crate) gosubstack: [usize; IJB_SIZEOF_GOSUB_STACK],
     pub(crate) forstack: [usize; IJB_SIZEOF_FOR_STACK],
-    /// 0:コマンド 1:式
-    pub(crate) tokenmode: u8,
+    /// トークン解釈が式の文脈にあるか (false=コマンド, true=式)。
+    pub(crate) is_expr_mode: bool,
 
     pub(crate) screenw: usize,
     pub(crate) screenh: usize,
-    pub(crate) screen_insertmode: bool,
+    /// 文字描画が上書きモードか (false=挿入, true=上書き)。
+    pub(crate) is_overwrite_mode: bool,
     pub(crate) screen_locatemode: u8,
 
-    pub(crate) key_insert: bool,
+    /// Insert キーのトグル状態 (false=挿入, true=上書き)。[`Machine::is_overwrite_mode`]
+    /// の同期元。
+    pub(crate) is_overwrite: bool,
     /// ローマ字かな変換の未確定バッファ (子音 1〜2 文字目)
     pub(crate) key_kana_buf_0: u8,
     pub(crate) key_kana_buf_1: u8,
@@ -118,8 +122,8 @@ pub struct Machine {
     /// ループ状態と同期させる。RUN 中は true、END/STOP/ESC ブレーク/完了で
     /// false。`pc` は STOP/ブレーク後も CONT 用に保持されるため実行中判定には
     /// 使えない。対話編集の入力可否はこのフラグで判断する。
-    pub program_running: bool,
-    pub(crate) noresmode: bool,
+    pub is_program_running: bool,
+    pub(crate) is_quiet_mode: bool,
 
     /// `INPUT` 文の入力待ち状態。`Some(target)` のとき、ホストが 1 行入力を
     /// 受け取って [`Machine::input_complete`] を呼ぶまで実行を中断する。
@@ -184,31 +188,30 @@ impl Machine {
             nforstack: 0,
             gosubstack: [0; IJB_SIZEOF_GOSUB_STACK],
             forstack: [0; IJB_SIZEOF_FOR_STACK],
-            tokenmode: 0,
+            is_expr_mode: false,
             listsize: 0,
 
             cursorx: 0,
             cursory: 0,
             screenw: SCREEN_W,
             screenh: SCREEN_H,
-            cursorflg: true,
-            screen_insertmode: true,
+            is_cursor_visible: true,
+            is_overwrite_mode: true,
             screen_locatemode: 0,
-            screen_invert: false,
+            is_screen_inverted: false,
             screen_big: 0,
-            video_enabled: true,
+            is_video_enabled: true,
 
-            // key_insert は 0=挿入 / 1=上書き (移植元の流儀をそのまま使う)
-            key_insert: false,
-            key_kana: false,
+            is_overwrite: false,
+            is_kana_mode: false,
             key_kana_buf_0: 0,
             key_kana_buf_1: 0,
-            key_flg_esc: 0,
+            is_esc_pressed: false,
             keybuf: VecDeque::with_capacity(128),
             keyboard_id: 1,
             keys_down: [false; 256],
-            program_running: false,
-            noresmode: false,
+            is_program_running: false,
+            is_quiet_mode: false,
             input_pending: None,
 
             psgoct: 3,
@@ -225,7 +228,7 @@ impl Machine {
             linecnt: 0,
             rndn: [123456789, 362436069, 521288629, 88675123],
 
-            led: false,
+            is_led_on: false,
             lastfile: 0,
 
             current_tone_hz: 0.0,
@@ -400,9 +403,9 @@ impl Machine {
     }
 
     /// 停止理由 `e` を画面に表示する。実行ループが `Err` を捕捉した時点で
-    /// 1 度だけ呼ぶ。`noresmode` 中は何も表示しない。
+    /// 1 度だけ呼ぶ。`is_quiet_mode` 中は何も表示しない。
     pub fn basic_print_error(&mut self, e: BasicError) {
-        if self.noresmode {
+        if self.is_quiet_mode {
             return;
         }
         if self.cursory == -1 {
@@ -501,7 +504,7 @@ impl Machine {
 
     /// ESC キーによる中断要求があるか。BASIC 実行ループの停止判定に使う。
     pub fn stop_execute(&self) -> bool {
-        self.key_flg_esc != 0
+        self.is_esc_pressed
     }
 
     // ---- キーバッファ ----
@@ -515,7 +518,7 @@ impl Machine {
 
     pub fn key_clear_key(&mut self) {
         self.keybuf.clear();
-        self.key_flg_esc = 0;
+        self.is_esc_pressed = false;
     }
 
     pub fn key_push(&mut self, c: u8) {
@@ -582,30 +585,30 @@ impl Machine {
 
     /// カナモードを反転し、未確定バッファをクリアする。
     pub fn toggle_kana(&mut self) {
-        self.key_kana = !self.key_kana;
+        self.is_kana_mode = !self.is_kana_mode;
         self.key_kana_buf_0 = 0;
         self.key_kana_buf_1 = 0;
     }
 
     /// 対話編集 (REPL) の各キー処理前に呼ぶ。挿入/上書きモードをユーザの
-    /// トグル状態 `key_insert` (false=挿入, true=上書き) に同期する。
+    /// トグル状態 `is_overwrite` に同期する。
     /// プログラム実行中の出力は basic_execute が上書きへ固定するので、
     /// ホストは実行中はこれを呼ばないこと。
     pub fn sync_insert_mode(&mut self) {
-        self.screen_insertmode = self.key_insert;
+        self.is_overwrite_mode = self.is_overwrite;
     }
 
     /// カーソル描画幅。上書きモードは文字全体 (8px) を反転、挿入モードは
     /// 左半分 (4px) のみ反転する (実機準拠)。true で全幅、false で左半分。
     pub fn cursor_full_width(&self) -> bool {
-        self.screen_insertmode
+        self.is_overwrite_mode
     }
 
     /// プログラムを継続実行中か。対話編集 (入力・カーソル移動) を行わない
     /// 判定に使う。`pc` は STOP/ESC ブレーク後も CONT 用に保持されるため
-    /// 判定には使えず、ホストが同期する [`Machine::program_running`] を見る。
+    /// 判定には使えず、ホストが同期する [`Machine::is_program_running`] を見る。
     pub fn is_executing(&self) -> bool {
-        self.program_running
+        self.is_program_running
     }
 
     /// `INPUT` 文がプロンプトを出して対話入力待ちに入っているか。
@@ -638,7 +641,7 @@ impl Machine {
         let saved_lasttoken = self.lasttoken;
         let saved_lasttokenpc = self.lasttokenpc;
         let saved_bk = self.bklasttoken;
-        let saved_tokenmode = self.tokenmode;
+        let saved_expr_mode = self.is_expr_mode;
         let saved_linebuf: Vec<u8> =
             self.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + N_LINEBUF].to_vec();
 
@@ -650,7 +653,7 @@ impl Machine {
         self.pc = OFFSET_RAM_LINEBUF;
         self.lasttoken = 0;
         self.lasttokenpc = 0;
-        self.tokenmode = 0;
+        self.is_expr_mode = false;
         if let Ok(value) = self.token_expression() {
             self.var_set(target, value);
         }
@@ -661,7 +664,7 @@ impl Machine {
         self.lasttoken = saved_lasttoken;
         self.lasttokenpc = saved_lasttokenpc;
         self.bklasttoken = saved_bk;
-        self.tokenmode = saved_tokenmode;
+        self.is_expr_mode = saved_expr_mode;
 
         self.put_chr(b'\n');
     }
@@ -684,7 +687,7 @@ impl Machine {
         if self.is_executing() {
             return;
         }
-        if !self.key_kana {
+        if !self.is_kana_mode {
             self.screen_putc(c);
             return;
         }

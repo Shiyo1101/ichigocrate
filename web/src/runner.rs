@@ -29,7 +29,7 @@ pub struct IchigoJamRunner {
     /// 使い回す RGBA バッファ (canvas へ転送)。
     rgba: Vec<u8>,
     /// プログラム実行中フラグ (REPL 行確定や RUN で true)。
-    running: bool,
+    is_running: bool,
     /// 60Hz tick を次に進める基準時刻 (ms)。
     next_tick_ms: f64,
     /// WAIT の実時間終了予定時刻 (ms)。
@@ -94,7 +94,7 @@ impl IchigoJamRunner {
             ctx,
             mono: vec![0; IMG_W * IMG_H],
             rgba: vec![0; IMG_W * IMG_H * 4],
-            running: false,
+            is_running: false,
             next_tick_ms: 0.0,
             wait_until_ms: None,
             start_ms: 0.0,
@@ -141,9 +141,9 @@ impl IchigoJamRunner {
             self.machine.wait_frames = 0;
         }
 
-        self.machine.program_running = self.running;
+        self.machine.is_program_running = self.is_running;
 
-        if self.running && self.wait_until_ms.is_none() {
+        if self.is_running && self.wait_until_ms.is_none() {
             self.step_chunk();
         }
 
@@ -187,7 +187,7 @@ impl IchigoJamRunner {
                 return;
             }
             "Escape" => {
-                self.machine.key_flg_esc = 1;
+                self.machine.is_esc_pressed = true;
                 if self.input_origin.is_some() {
                     self.cancel_input();
                 }
@@ -201,7 +201,7 @@ impl IchigoJamRunner {
         }
 
         // F1-F9 コマンド割当 (REPL 待機中のみ。実行中/入力待ち中は無効)。
-        if !self.running && self.input_origin.is_none() {
+        if !self.is_running && self.input_origin.is_none() {
             if let Some((cmd, run)) = fkey_binding(code) {
                 self.type_fkey_command(cmd, run);
                 return;
@@ -224,13 +224,13 @@ impl IchigoJamRunner {
 
     /// 現在カナモードか (タイトル表示などに使う)。
     pub fn is_kana(&self) -> bool {
-        self.machine.key_kana
+        self.machine.is_kana_mode
     }
 
     /// LED が点灯中か (`LED 1` で true)。実機 LED の代わりにフロント側が画面枠を
     /// 赤くするなどの表示に使う (枠描画はフロントの責務)。
     pub fn is_led(&self) -> bool {
-        self.machine.led
+        self.machine.is_led_on
     }
 }
 
@@ -284,7 +284,7 @@ impl IchigoJamRunner {
     #[wasm_bindgen(js_name = "reset")]
     pub fn reset(&mut self) {
         self.machine.basic_init();
-        self.running = false;
+        self.is_running = false;
         self.input_origin = None;
         self.wait_until_ms = None;
     }
@@ -305,7 +305,7 @@ impl IchigoJamRunner {
     /// 実行中プログラムを中断する (ESC 相当)。暴走停止に使う。
     #[wasm_bindgen(js_name = "break")]
     pub fn break_(&mut self) {
-        self.machine.key_flg_esc = 1;
+        self.machine.is_esc_pressed = true;
     }
 
     /// 画面 (VRAM) を文字列スナップショットとして取得する。各行の末尾空白は
@@ -381,7 +381,7 @@ impl IchigoJamRunner {
                 break; // ステップ中に WAIT 発火 → 次フレームへ
             }
             if let Some(res) = self.machine.basic_step() {
-                self.running = false;
+                self.is_running = false;
                 match res {
                     BasicResult::Execute => self.machine.put_str("OK\n"),
                     BasicResult::Input => self.begin_input(),
@@ -392,11 +392,11 @@ impl IchigoJamRunner {
                     }
                     BasicResult::Edit => {}
                 }
-                self.machine.key_flg_esc = 0;
+                self.machine.is_esc_pressed = false;
                 break;
             }
             if self.machine.pc == PC_NULL {
-                self.running = false;
+                self.is_running = false;
                 self.machine.put_str("OK\n");
                 break;
             }
@@ -421,7 +421,7 @@ impl IchigoJamRunner {
             }
             // カナモード中の Backspace は未確定バッファ管理のため input_putc を通す。
             _ if is_edit_control_code(c) => {
-                if c == kc::BACKSPACE && self.machine.key_kana {
+                if c == kc::BACKSPACE && self.machine.is_kana_mode {
                     self.machine.input_putc(c);
                 } else {
                     self.machine.input_control(c);
@@ -435,11 +435,11 @@ impl IchigoJamRunner {
 
     /// REPL 1 行を直接実行する。停止中 (REPL) のみ受理し、実行中・入力待ち中は無視。
     fn exec_line_str(&mut self, line: &str) {
-        if self.running || self.input_origin.is_some() {
+        if self.is_running || self.input_origin.is_some() {
             return;
         }
-        self.machine.program_running = false;
-        self.machine.key_flg_esc = 0;
+        self.machine.is_program_running = false;
+        self.machine.is_esc_pressed = false;
         match exec_line(&mut self.machine, line) {
             Ok(LineOutcome::Executed) => self.finish_executed(),
             Ok(LineOutcome::Edited) => {}
@@ -452,11 +452,11 @@ impl IchigoJamRunner {
     ///
     /// IchigoJam は実行後も pc を非 NULL に残し後続の basic_step で完了する設計
     /// なので、即時文はここで 1 フレーム分まで同期実行して完了させる。終わらなければ
-    /// (RUN の無限ループ等) running を立ててフレーム側へ委譲し、ブラウザを固めない。
+    /// (RUN の無限ループ等) is_running を立ててフレーム側へ委譲し、ブラウザを固めない。
     fn finish_executed(&mut self) {
         if self.machine.pc != PC_NULL {
-            self.running = true;
-            self.machine.program_running = true;
+            self.is_running = true;
+            self.machine.is_program_running = true;
             if self.wait_until_ms.is_none() {
                 self.step_chunk();
             }
@@ -466,10 +466,10 @@ impl IchigoJamRunner {
     }
 
     fn sync_before_input(&mut self) {
-        self.machine.program_running = self.running;
-        if !self.running {
+        self.machine.is_program_running = self.is_running;
+        if !self.is_running {
             self.machine.sync_insert_mode();
-            self.machine.cursorflg = true;
+            self.machine.is_cursor_visible = true;
         }
     }
 
@@ -581,7 +581,7 @@ impl IchigoJamRunner {
         if len == 0 {
             return;
         }
-        self.machine.key_flg_esc = 0;
+        self.machine.is_esc_pressed = false;
         let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
         match exec_line_bytes(&mut self.machine, &line) {
             Ok(LineOutcome::Executed) => self.finish_executed(),
@@ -597,7 +597,7 @@ impl IchigoJamRunner {
     /// INPUT 入力待ちの開始。プロンプト直後のカーソル位置を値の開始に記録する。
     fn begin_input(&mut self) {
         self.input_origin = Some((self.machine.cursorx, self.machine.cursory));
-        self.machine.key_flg_esc = 0;
+        self.machine.is_esc_pressed = false;
     }
 
     /// INPUT の入力確定。値テキストを読み取り変数へ反映して実行を再開する。
@@ -612,7 +612,7 @@ impl IchigoJamRunner {
             .unwrap_or(vram_end - start);
         let line: Vec<u8> = self.machine.ram[start..start + len].to_vec();
         self.machine.input_complete(&line);
-        self.running = true;
+        self.is_running = true;
     }
 
     /// INPUT 入力中の ESC 中断。代入せず REPL へ戻る。
@@ -620,6 +620,6 @@ impl IchigoJamRunner {
         self.input_origin = None;
         self.machine.cancel_input();
         self.machine.put_str("OK\n");
-        self.machine.key_flg_esc = 0;
+        self.machine.is_esc_pressed = false;
     }
 }

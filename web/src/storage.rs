@@ -14,15 +14,15 @@ const SLOT_COUNT: u8 = 16;
 #[derive(Debug)]
 pub(crate) struct WebStorage {
     prefix: String,
-    persist: bool,
+    is_persistent: bool,
     mem: HashMap<u8, Vec<u8>>,
 }
 
 impl WebStorage {
-    pub(crate) fn new(prefix: String, persist: bool) -> Self {
+    pub(crate) fn new(prefix: String, is_persistent: bool) -> Self {
         Self {
             prefix,
-            persist,
+            is_persistent,
             mem: HashMap::new(),
         }
     }
@@ -33,7 +33,7 @@ impl WebStorage {
 
     /// 永続化が有効で localStorage が使えるときだけハンドルを返す。
     fn local_storage(&self) -> Option<web_sys::Storage> {
-        if !self.persist {
+        if !self.is_persistent {
             return None;
         }
         web_sys::window()?.local_storage().ok().flatten()

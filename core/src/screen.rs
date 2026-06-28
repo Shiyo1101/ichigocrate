@@ -61,7 +61,7 @@ impl Machine {
     /// `SCREEN_W/H >> screen_big` に再設定する。これにより折り返し位置・
     /// カーソル可動範囲が拡大倍率へ追従する。
     pub fn video_on(&mut self) {
-        self.video_enabled = true;
+        self.is_video_enabled = true;
         self.screenw = SCREEN_W >> self.screen_big as u32;
         self.screenh = SCREEN_H >> self.screen_big as u32;
     }
@@ -163,7 +163,7 @@ impl Machine {
     /// とき、左隣が空でなくなる位置 (= テキスト末尾) まで、なければ 0 列まで
     /// 戻す。上書きモードは実機同様に自由移動とし、何もしない。
     fn cursor_snap_to_text(&mut self) {
-        if self.screen_insertmode {
+        if self.is_overwrite_mode {
             return; // 上書きモードは自由移動 (実機準拠)
         }
         let w = self.screenw;
@@ -255,7 +255,7 @@ impl Machine {
                     self.cursorx -= 1;
                 } else if self.cursory > 0
                     && (self.vram()[self.cursory as usize * w - 1] != 0
-                        || self.screen_insertmode)
+                        || self.is_overwrite_mode)
                 {
                     self.cursory -= 1;
                     self.cursorx = w as i32 - 1;
@@ -266,7 +266,7 @@ impl Machine {
                     self.cursorx == w as i32 - 1 && self.cursory == h as i32 - 1;
                 let current_idx = self.cursory as usize * w + self.cursorx as usize;
                 let movable = !at_last_cell
-                    && (self.vram()[current_idx] != 0 || self.screen_insertmode);
+                    && (self.vram()[current_idx] != 0 || self.is_overwrite_mode);
                 if movable {
                     self.cursorx += 1;
                     if self.cursorx == w as i32 {
@@ -298,17 +298,17 @@ impl Machine {
                 self.screen_locatemode = 2;
             }
             KANA_TOGGLE => {
-                self.key_kana = !self.key_kana;
+                self.is_kana_mode = !self.is_kana_mode;
             }
             INSERT_TOGGLE => {
-                self.key_insert = !self.key_insert;
+                self.is_overwrite = !self.is_overwrite;
             }
             _ => {
                 if c < 32 && c != 0 {
                     return;
                 }
-                if !self.screen_insertmode {
-                    // 挿入モード (screen_insertmode は移植元の流儀で 0=挿入)
+                if !self.is_overwrite_mode {
+                    // 挿入モード: 後続の文字を 1 つずつ右へずらして空きを作る
                     let mut now = self.cursory as usize * w + self.cursorx as usize;
                     let mut cxlast = now;
                     while cxlast < w * h && self.vram()[cxlast] != 0 {
