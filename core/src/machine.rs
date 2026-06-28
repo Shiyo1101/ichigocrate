@@ -391,7 +391,7 @@ impl Machine {
         self.pc = PC_NULL;
         self.pcbreak = PC_NULL;
         self.listsize = 0;
-        self.screen_clp();
+        self.reset_pcg_to_font();
     }
 
     // ---- エラー ----
@@ -479,15 +479,17 @@ impl Machine {
         len
     }
 
-    /// 10 進表示時の文字数 (符号 `-` を含む)。例: `beam(-42)` → 3。
+    /// 10 進表示時の文字数 (符号 `-` を含む)。例: `decimal_width(-42)` → 3。
     /// PRINT DEC$ の桁数調整に使う。
-    pub fn beam(n: i32) -> u32 {
+    pub fn decimal_width(n: i32) -> u32 {
         let sign = u32::from(n < 0);
         let digits = n.unsigned_abs().checked_ilog10().unwrap_or(0) + 1;
         sign + digits
     }
 
-    pub fn put_strmem(&mut self, n: i32, mut m: i16) {
+    /// アドレス `n` (RAMROM 空間) から最大 `m` 文字を画面へ出力する。
+    /// `"` か NUL に当たるか `m` 文字出したら止まる。
+    pub fn put_str_from_mem(&mut self, n: i32, mut m: i16) {
         if n >= OFFSET_RAMROM as i32 {
             let mut p = (n - OFFSET_RAMROM as i32) as usize;
             while p < SIZE_RAM {
@@ -654,7 +656,7 @@ impl Machine {
         self.lasttoken = 0;
         self.lasttokenpc = 0;
         self.is_expr_mode = false;
-        if let Ok(value) = self.token_expression() {
+        if let Ok(value) = self.eval_expression() {
             self.var_set(target, value);
         }
 

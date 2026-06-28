@@ -2,6 +2,19 @@
 // https://github.com/IchigoJam/ichigojam-firm/blob/main/IchigoJam_BASIC/basic.h
 
 //! 式評価。
+//!
+//! 再帰下降で式を評価する。各 `eval_*` は 1 つの優先順位の段に対応し、優先順位の
+//! 低い段が高い段を呼ぶ形で連なる (低い段ほど後で結合する)。同じ段の演算子は
+//! 左から順に評価する。優先順位は低い順に:
+//!
+//! 1. [`Machine::eval_logical_or`]      — `||`
+//! 2. [`Machine::eval_logical_and`]     — `&&`
+//! 3. [`Machine::eval_comparison`]      — `==` `!=` `<` `>` `<=` `>=`
+//! 4. [`Machine::eval_additive`]        — `+` `-` とビット OR `|`
+//! 5. [`Machine::eval_multiplicative`]  — `*` `/` `%` とビット `&` `^` `<<` `>>`
+//! 6. [`Machine::eval_unary`]           — 単項 `-` `~` `!` と一次式 (数値・変数・関数・括弧)
+//!
+//! [`Machine::eval_expression`] が最下段から評価を始める入口。
 
 use super::sin::sin360;
 use super::{IJB_BUILD, IJB_VER, LANG_JP, VER_PLATFORM_PC};
@@ -11,54 +24,58 @@ use crate::ram::*;
 use crate::tokens::*;
 
 impl Machine {
-    pub fn token_expression(&mut self) -> BResult<i16> {
+    /// 式を 1 つ評価して値を返す、外部からの入口。最下段 (論理 OR) から評価する。
+    pub fn eval_expression(&mut self) -> BResult<i16> {
         self.is_expr_mode = true;
         self.lasttokenpc = 0;
-        // is_expr_mode は途中でエラーになっても必ず 0 へ戻す必要があるため、
+        // is_expr_mode は途中でエラーになっても必ず false へ戻す必要があるため、
         // 本体を内部関数に分け、成否に関わらず後始末する。
-        let result = self.token_expression_inner();
+        let result = self.eval_logical_or();
         self.is_expr_mode = false;
         self.lasttokenpc = 0;
         result
     }
 
-    fn token_expression_inner(&mut self) -> BResult<i16> {
-        let mut value = self.token_expression1()?;
+    /// 優先順位 1 (最低): 論理 OR `||`。0/非0 を真偽として畳み込む。
+    fn eval_logical_or(&mut self) -> BResult<i16> {
+        let mut value = self.eval_logical_and()?;
         loop {
             let t = self.token_get();
             if t.code != TOKEN_LOR_1 && t.code != TOKEN_LOR_2 {
                 self.token_back();
                 break;
             }
-            let v2 = self.token_expression1()?;
+            let v2 = self.eval_logical_and()?;
             value = (value != 0 || v2 != 0) as i16;
         }
         Ok(value)
     }
 
-    fn token_expression1(&mut self) -> BResult<i16> {
-        let mut value = self.token_expression2()?;
+    /// 優先順位 2: 論理 AND `&&`。0/非0 を真偽として畳み込む。
+    fn eval_logical_and(&mut self) -> BResult<i16> {
+        let mut value = self.eval_comparison()?;
         loop {
             let t = self.token_get();
             if t.code != TOKEN_LAND_1 && t.code != TOKEN_LAND_2 {
                 self.token_back();
                 break;
             }
-            let v2 = self.token_expression2()?;
+            let v2 = self.eval_comparison()?;
             value = (value != 0 && v2 != 0) as i16;
         }
         Ok(value)
     }
 
-    fn token_expression2(&mut self) -> BResult<i16> {
-        let mut value = self.token_expression3()?;
+    /// 優先順位 3: 比較 `==` `!=` `<` `>` `<=` `>=`。結果は 1 (真) / 0 (偽)。
+    fn eval_comparison(&mut self) -> BResult<i16> {
+        let mut value = self.eval_additive()?;
         loop {
             let t = self.token_get();
             if t.code < TOKEN_EQEQ || t.code > TOKEN_GT {
                 self.token_back();
                 break;
             }
-            let rv = self.token_expression3()?;
+            let rv = self.eval_additive()?;
             value = match t.code {
                 TOKEN_GT => (value > rv) as i16,
                 TOKEN_EQEQ | TOKEN_EQ => (value == rv) as i16,
@@ -72,15 +89,16 @@ impl Machine {
         Ok(value)
     }
 
-    fn token_expression3(&mut self) -> BResult<i16> {
-        let mut value = self.token_expression4()?;
+    /// 優先順位 4: 加減算 `+` `-` とビット OR `|` (本家 BASIC では同順位)。
+    fn eval_additive(&mut self) -> BResult<i16> {
+        let mut value = self.eval_multiplicative()?;
         loop {
             let t = self.token_get();
             if t.code < TOKEN_PLUS || t.code > TOKEN_OR {
                 self.token_back();
                 break;
             }
-            let v2 = self.token_expression4()?;
+            let v2 = self.eval_multiplicative()?;
             value = match t.code {
                 TOKEN_PLUS => value.wrapping_add(v2),
                 TOKEN_MINUS => value.wrapping_sub(v2),
@@ -90,15 +108,17 @@ impl Machine {
         Ok(value)
     }
 
-    fn token_expression4(&mut self) -> BResult<i16> {
-        let mut value = self.token_expression5()?;
+    /// 優先順位 5: 乗除算 `*` `/` `%` とビット `&` `^` `<<` `>>` (本家 BASIC では同順位)。
+    /// 0 除算は [`ERR_DIVIDE_BY_ZERO`]。
+    fn eval_multiplicative(&mut self) -> BResult<i16> {
+        let mut value = self.eval_unary()?;
         loop {
             let t = self.token_get();
             if t.code < TOKEN_AND || t.code > TOKEN_MOD_2 {
                 self.token_back();
                 break;
             }
-            let v2 = self.token_expression5()?;
+            let v2 = self.eval_unary()?;
             match t.code {
                 TOKEN_AND => value &= v2,
                 TOKEN_XOR => value ^= v2,
@@ -125,29 +145,34 @@ impl Machine {
         Ok(value)
     }
 
-    fn token_paren1(&mut self) -> BResult<i16> {
-        let v = self.token_expression()?;
+    /// 関数の必須引数 `(式)` を 1 つ評価し、閉じ括弧まで読む (例: `ABS(x)`)。
+    fn eval_paren_arg(&mut self) -> BResult<i16> {
+        let v = self.eval_expression()?;
         self.expect_paren_close()?;
         Ok(v)
     }
 
-    fn token_opt1(&mut self) -> BResult<i16> {
+    /// 省略可能な引数。`()` のように空なら 0、`(式)` があればその値を返す
+    /// (例: `BTN()` / `BTN(28)`)。
+    fn eval_optional_arg(&mut self) -> BResult<i16> {
         let t = self.token_get();
         if t.code == TOKEN_PAREN_E {
             return Ok(0);
         }
         self.token_back();
-        let v = self.token_expression()?;
+        let v = self.eval_expression()?;
         self.expect_paren_close()?;
         Ok(v)
     }
 
-    fn token_expression5(&mut self) -> BResult<i16> {
+    /// 優先順位 6 (最高): 単項演算子 (`-` 符号反転 / `~` ビット反転 / `!` 論理否定) と
+    /// 一次式 (数値・変数・配列・括弧・各種組込み関数)。式の葉に当たる。
+    fn eval_unary(&mut self) -> BResult<i16> {
         let t = self.token_get();
         match t.code {
-            TOKEN_MINUS => Ok(self.token_expression5()?.wrapping_neg()),
-            TOKEN_NOT => Ok(!self.token_expression5()?),
-            TOKEN_LNOT_1 | TOKEN_LNOT_2 => Ok((self.token_expression5()? == 0) as i16),
+            TOKEN_MINUS => Ok(self.eval_unary()?.wrapping_neg()),
+            TOKEN_NOT => Ok(!self.eval_unary()?),
+            TOKEN_LNOT_1 | TOKEN_LNOT_2 => Ok((self.eval_unary()? == 0) as i16),
             TOKEN_NUMBER => Ok(t.value),
             TOKEN_VAR => Ok(self.var_get(t.value as usize)),
             TOKEN_ARRAY => {
@@ -155,7 +180,7 @@ impl Machine {
                 Ok(self.var_get(i))
             }
             TOKEN_PAREN_B => {
-                let v = self.token_expression()?;
+                let v = self.eval_expression()?;
                 self.expect_paren_close()?;
                 Ok(v)
             }
@@ -171,11 +196,11 @@ impl Machine {
                 }
             }
             TOKEN_BTN => {
-                let n = self.token_opt1()?;
+                let n = self.eval_optional_arg()?;
                 Ok(self.btn(n))
             }
             TOKEN_POS => {
-                let n = self.token_opt1()?;
+                let n = self.eval_optional_arg()?;
                 Ok(match n {
                     1 => self.cursorx as i16,
                     2 => self.cursory as i16,
@@ -189,12 +214,12 @@ impl Machine {
                 Ok(self.psg_sound() as i16)
             }
             TOKEN_ANA => {
-                self.token_opt1()?;
+                self.eval_optional_arg()?;
                 Ok(0)
             }
             TOKEN_FREE => Ok(((IJB_SIZEOF_LIST as u16) - 2 - self.listsize) as i16),
             TOKEN_VER => {
-                let n = self.token_opt1()?;
+                let n = self.eval_optional_arg()?;
                 Ok(match n {
                     0 => (IJB_VER * 100 + IJB_BUILD) as i16,
                     3 => LANG_JP as i16,
@@ -206,7 +231,7 @@ impl Machine {
                 })
             }
             TOKEN_LEN => {
-                let n = self.token_paren1()? as i32;
+                let n = self.eval_paren_arg()? as i32;
                 if n >= OFFSET_RAMROM as i32 {
                     let mut p = (n - OFFSET_RAMROM as i32) as usize;
                     let mut cnt = 0i16;
@@ -224,7 +249,7 @@ impl Machine {
                 }
             }
             TOKEN_TICK => {
-                let n = self.token_opt1()?;
+                let n = self.eval_optional_arg()?;
                 Ok(self.video_tick(n))
             }
             TOKEN_FILE => Ok(self.lastfile as i16),
@@ -250,19 +275,19 @@ impl Machine {
                 Ok(t.code as i16 - (TOKEN_LEFT as i16 - 28))
             }
             TOKEN_ABS => {
-                let v = self.token_paren1()?;
+                let v = self.eval_paren_arg()?;
                 Ok(v.unsigned_abs() as i16)
             }
             TOKEN_RND => {
-                let n = self.token_paren1()?;
+                let n = self.eval_paren_arg()?;
                 Ok(self.random(n))
             }
             TOKEN_PEEK_1 | TOKEN_PEEK_2 => {
-                let v = self.token_paren1()?;
+                let v = self.eval_paren_arg()?;
                 Ok(self.peek(v as i32) as i16)
             }
             TOKEN_SIN | TOKEN_COS => {
-                let mut v = self.token_paren1()?;
+                let mut v = self.eval_paren_arg()?;
                 if t.code == TOKEN_COS {
                     v += 90;
                 }
@@ -270,7 +295,7 @@ impl Machine {
             }
             TOKEN_IN => {
                 // 実機 GPIO 入力。デスクトップ移植では未対応のため 0 固定
-                self.token_opt1()?;
+                self.eval_optional_arg()?;
                 Ok(0)
             }
             TOKEN_VPEEK | TOKEN_SCR | TOKEN_POINT => {
@@ -280,9 +305,9 @@ impl Machine {
                     return Ok(self.screen_get_current() as i16);
                 }
                 self.token_back();
-                let v = self.token_expression()?;
+                let v = self.eval_expression()?;
                 self.expect_token(TOKEN_COMMA)?;
-                let v2 = self.token_expression()?;
+                let v2 = self.eval_expression()?;
                 self.expect_paren_close()?;
                 if kind == TOKEN_POINT {
                     Ok(self.screen_pset(v as i32, v2 as i32, 3) as i16)
@@ -291,10 +316,10 @@ impl Machine {
                 }
             }
             TOKEN_USR => {
-                self.token_expression()?;
+                self.eval_expression()?;
                 let t = self.token_get();
                 if t.code == TOKEN_COMMA {
-                    self.token_expression()?;
+                    self.eval_expression()?;
                     self.expect_paren_close()?;
                 } else if t.code != TOKEN_PAREN_E {
                     return Err(ERR_SYNTAX_ERROR);
@@ -302,7 +327,7 @@ impl Machine {
                 Ok(0)
             }
             TOKEN_STRING => {
-                let p = self.token_skipstr();
+                let p = self.skip_string_literal();
                 Ok((p as i32 + OFFSET_RAMROM as i32) as i16)
             }
             TOKEN_AT => {

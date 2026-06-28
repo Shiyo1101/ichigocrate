@@ -178,15 +178,15 @@ impl Machine {
         if code == TOKEN_NULL || code == TOKEN_ELSE {
             return Ok(default);
         }
-        self.token_expression()
+        self.eval_expression()
     }
 
     /// `HEX$/BIN$/DEC$/STR$` のような `expr` または `expr,m` + `)` をパース。
     pub(super) fn parse_format_args(&mut self, default_m: i16) -> BResult<(i16, i16)> {
-        let n = self.token_expression()?;
+        let n = self.eval_expression()?;
         let t = self.token_get();
         let m = if t.code == TOKEN_COMMA {
-            let m = self.token_expression()?;
+            let m = self.eval_expression()?;
             self.expect_paren_close()?;
             m
         } else if t.code == TOKEN_PAREN_E {
@@ -198,7 +198,7 @@ impl Machine {
     }
 
     pub(super) fn token_get_array_index(&mut self) -> BResult<usize> {
-        let v = self.token_expression()?;
+        let v = self.eval_expression()?;
         if self.token_get().code != TOKEN_ARRAY_E {
             return Err(ERR_SYNTAX_ERROR);
         }
@@ -209,7 +209,7 @@ impl Machine {
     }
 
     /// `TOKEN_NULL` か `TOKEN_ELSE` 以外なら Syntax error。
-    pub(super) fn token_end(&mut self) -> BResult<()> {
+    pub(super) fn expect_statement_end(&mut self) -> BResult<()> {
         let code = self.token_get().code;
         self.token_back();
         if code != TOKEN_NULL && code != TOKEN_ELSE {
@@ -219,7 +219,7 @@ impl Machine {
     }
 
     /// 文字列リテラル本体を画面に流して終端の `"` を消費する。
-    pub(super) fn token_puts(&mut self) {
+    pub(super) fn print_string_literal(&mut self) {
         while self.pc < self.ram.len() && self.ram[self.pc] != 0 && self.ram[self.pc] != b'"' {
             let c = self.ram[self.pc];
             self.put_chr(c);
@@ -231,7 +231,7 @@ impl Machine {
     }
 
     /// 文字列リテラルを読み飛ばし、本体先頭の RAM インデックスを返す。
-    pub(super) fn token_skipstr(&mut self) -> usize {
+    pub(super) fn skip_string_literal(&mut self) -> usize {
         let res = self.pc;
         while self.pc < self.ram.len() && self.ram[self.pc] != 0 && self.ram[self.pc] != b'"' {
             self.pc += 1;
@@ -243,15 +243,15 @@ impl Machine {
     }
 
     /// 省略可能な `,expr` を読んでから文末を確認する (WAIT / RENUM 等)。
-    pub(super) fn token_option1(&mut self, default_value: i16) -> BResult<i16> {
+    pub(super) fn parse_optional_trailing_arg(&mut self, default_value: i16) -> BResult<i16> {
         let code = self.token_get().code;
         if code != TOKEN_COMMA {
             self.token_back();
-            self.token_end()?;
+            self.expect_statement_end()?;
             Ok(default_value)
         } else {
-            let v = self.token_expression()?;
-            self.token_end()?;
+            let v = self.eval_expression()?;
+            self.expect_statement_end()?;
             Ok(v)
         }
     }

@@ -103,7 +103,7 @@ impl Machine {
             return Err(ERR_SYNTAX_ERROR);
         }
         self.command_let2(v)?;
-        self.token_end()
+        self.expect_statement_end()
     }
 
     /// `A(i),v0,v1,...` の連続代入。`start` から順に配列要素へ書き込む。
@@ -117,7 +117,7 @@ impl Machine {
             let t = self.token_get();
             if t.code != terminator {
                 self.token_back();
-                return self.token_end();
+                return self.expect_statement_end();
             }
             v += 1;
             if v >= IJB_SIZEOF_ARRAY {
@@ -128,13 +128,13 @@ impl Machine {
     }
 
     fn command_let2(&mut self, v: usize) -> BResult<i16> {
-        let value = self.token_expression()?;
+        let value = self.eval_expression()?;
         self.var_set(v, value);
         Ok(value)
     }
 
     pub(super) fn command_if(&mut self) -> BResult<()> {
-        let b = self.token_expression()?;
+        let b = self.eval_expression()?;
         if b != 0 {
             let t = self.token_get();
             if t.code != TOKEN_THEN {
@@ -150,7 +150,7 @@ impl Machine {
                     }
                     self.pc += 1;
                 } else if code == TOKEN_STRING {
-                    self.token_skipstr();
+                    self.skip_string_literal();
                 } else if code == TOKEN_ELSE {
                     break;
                 } else if code == TOKEN_IF || code == TOKEN_REM_1 || code == TOKEN_REM_2 {
@@ -176,25 +176,25 @@ impl Machine {
         }
         let ival = self.command_let2(v)?;
         self.expect_token(TOKEN_TO)?;
-        let to = self.token_expression()?;
+        let to = self.eval_expression()?;
         let mut step: i16 = 1;
         let t = self.token_get();
         if t.code != TOKEN_STEP {
             self.token_back();
         } else {
-            step = self.token_expression()?;
+            step = self.eval_expression()?;
         }
         if (step > 0 && ival > to) || (step < 0 && ival < to) {
             return Err(ERR_ILLEGAL_ARGUMENT);
         }
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_next(&mut self) -> BResult<()> {
         if self.nforstack == 0 {
             return Err(ERR_NOT_MATCH);
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
         let bkpc = self.pc;
         self.pc = self.forstack[self.nforstack as usize - 1];
         let v = self.parse_lvalue_index()?;
@@ -202,17 +202,17 @@ impl Machine {
         if t.code != TOKEN_EQ && t.code != TOKEN_COMMA {
             return Err(ERR_SYNTAX_ERROR);
         }
-        let ival = self.token_expression()?;
+        let ival = self.eval_expression()?;
         self.expect_token(TOKEN_TO)?;
-        let to = self.token_expression()?;
+        let to = self.eval_expression()?;
         let mut step: i16 = 1;
         let t = self.token_get();
         if t.code != TOKEN_STEP {
             self.token_back();
         } else {
-            step = self.token_expression()?;
+            step = self.eval_expression()?;
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
 
         let cur = self.var_get(v);
         if cur == to {
@@ -236,12 +236,12 @@ impl Machine {
     }
 
     pub(super) fn command_goto(&mut self) -> BResult<()> {
-        let n = self.token_expression()?;
+        let n = self.eval_expression()?;
         let idx = self.list_find_goto(n);
         if idx < 0 {
             return Err(ERR_UNDEFINED_LINE);
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.list_set_pc(idx as u16);
         Ok(())
     }
@@ -250,12 +250,12 @@ impl Machine {
         if self.ngosubstack as usize >= IJB_SIZEOF_GOSUB_STACK {
             return Err(ERR_STACK_OVERFLOW);
         }
-        let n = self.token_expression()?;
+        let n = self.eval_expression()?;
         let idx = self.list_find_goto(n);
         if idx < 0 {
             return Err(ERR_UNDEFINED_LINE);
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.gosubstack[self.ngosubstack as usize] = self.pc;
         self.ngosubstack += 1;
         self.list_set_pc(idx as u16);
@@ -266,14 +266,14 @@ impl Machine {
         if self.ngosubstack == 0 {
             return Err(ERR_NOT_MATCH);
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.ngosubstack -= 1;
         self.pc = self.gosubstack[self.ngosubstack as usize];
         Ok(())
     }
 
     pub(super) fn command_cont(&mut self) -> BResult<()> {
-        self.token_end()?;
+        self.expect_statement_end()?;
         if !self.pc_in_list() {
             self.pc = self.pcbreak;
         }
@@ -300,14 +300,14 @@ impl Machine {
     }
 
     pub(super) fn command_end(&mut self) -> BResult<()> {
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.pc = PC_NULL;
         self.pcbreak = PC_NULL;
         Ok(())
     }
 
     pub(super) fn command_run(&mut self) -> BResult<()> {
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.ngosubstack = 0;
         self.nforstack = 0;
         self.key_clear_key();
@@ -325,16 +325,16 @@ impl Machine {
         while self.pc < self.ram.len() && self.ram[self.pc] != 0 && self.ram[self.pc] != b':' {
             self.pc += 1;
         }
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_ok(&mut self) -> BResult<()> {
         // 引数 2 で「応答抑制 (is_quiet_mode)」を有効化。それ以外は解除。
         let mut quiet = false;
         if self.token_get_char() != 0 {
-            quiet = self.token_expression()? == 2;
+            quiet = self.eval_expression()? == 2;
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.is_quiet_mode = quiet;
         Ok(())
     }
@@ -350,9 +350,9 @@ impl Machine {
                 break;
             }
             match t.code {
-                TOKEN_STRING => self.token_puts(),
+                TOKEN_STRING => self.print_string_literal(),
                 TOKEN_CHR => loop {
-                    let n = self.token_expression()?;
+                    let n = self.eval_expression()?;
                     self.put_chr((n & 0xff) as u8);
                     let t = self.token_get();
                     if t.code == TOKEN_COMMA {
@@ -377,12 +377,12 @@ impl Machine {
                 }
                 TOKEN_STR => {
                     let (n, m) = self.parse_format_args(-1)?;
-                    self.put_strmem(n as i32, m);
+                    self.put_str_from_mem(n as i32, m);
                 }
                 TOKEN_ERROR => return Err(ERR_SYNTAX_ERROR),
                 _ => {
                     self.token_back();
-                    let n = self.token_expression()?;
+                    let n = self.eval_expression()?;
                     self.put_num(n as i32);
                 }
             }
@@ -403,7 +403,7 @@ impl Machine {
         if retflg {
             self.put_chr(b'\n');
         }
-        self.token_end()
+        self.expect_statement_end()
     }
 
     /// INPUT [prompt,] var: プロンプトを表示し、対話入力で 1 行受け取って
@@ -416,7 +416,7 @@ impl Machine {
     pub(super) fn command_input(&mut self) -> BResult<()> {
         let t = self.token_get();
         let target = if t.code == TOKEN_STRING {
-            self.token_puts();
+            self.print_string_literal();
             self.expect_token(TOKEN_COMMA)?;
             self.parse_lvalue_index()?
         } else {
@@ -424,13 +424,13 @@ impl Machine {
             self.token_back();
             self.parse_lvalue_index()?
         };
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.input_pending = Some(target);
         Ok(())
     }
 
     pub(super) fn command_new(&mut self) -> BResult<()> {
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.listsize = 0;
         self.pc = PC_NULL;
@@ -442,11 +442,11 @@ impl Machine {
         let mut min = 0i16;
         let mut max = 0i32;
         if self.token_get_char() != 0 {
-            min = self.token_expression()?;
+            min = self.eval_expression()?;
             let code = self.token_get().code;
             match code {
                 TOKEN_COMMA => {
-                    max = self.token_expression()? as i32;
+                    max = self.eval_expression()? as i32;
                 }
                 TOKEN_NULL | TOKEN_ELSE => {
                     if min < 0 {
@@ -466,7 +466,7 @@ impl Machine {
                 max = -1;
             }
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
         let mut index: u16 = 0;
         loop {
             let num = self.list_get_number(index);
@@ -493,29 +493,29 @@ impl Machine {
     }
 
     pub(super) fn command_led(&mut self) -> BResult<()> {
-        let n = self.token_expression()?;
+        let n = self.eval_expression()?;
         self.is_led_on = n != 0;
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_out(&mut self) -> BResult<()> {
-        self.token_expression()?;
+        self.eval_expression()?;
         let code = self.token_get().code;
         if code != TOKEN_COMMA {
             self.token_back();
         } else {
-            self.token_expression()?;
+            self.eval_expression()?;
         }
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_clo(&mut self) -> BResult<()> {
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_wait(&mut self) -> BResult<()> {
-        let n = self.token_expression()?;
-        self.token_option1(1)?;
+        let n = self.eval_expression()?;
+        self.parse_optional_trailing_arg(1)?;
         // フレームベースの協調的待機。UI アプリは毎フレーム wait_frames を
         // 1 ずつ減らし、0 になるまで basic_step を呼ばない。
         self.wait_frames = self.wait_frames.saturating_add(n.max(0) as u32);
@@ -523,31 +523,31 @@ impl Machine {
     }
 
     pub(super) fn command_cls(&mut self) -> BResult<()> {
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.screen_clear();
         Ok(())
     }
 
     pub(super) fn command_clt(&mut self) -> BResult<()> {
-        self.token_end()?;
-        self.video_clt();
+        self.expect_statement_end()?;
+        self.reset_tick_counters();
         Ok(())
     }
 
     pub(super) fn command_clv(&mut self) -> BResult<()> {
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.clear_vars();
         Ok(())
     }
 
     pub(super) fn command_locate(&mut self) -> BResult<()> {
-        let x = self.token_expression()?;
+        let x = self.eval_expression()?;
         let code = self.token_get().code;
         let (x, y) = if code == TOKEN_COMMA {
-            let y = self.token_expression()?;
+            let y = self.eval_expression()?;
             let code = self.token_get().code;
             if code == TOKEN_COMMA {
-                self.is_cursor_visible = self.token_expression()? != 0;
+                self.is_cursor_visible = self.eval_expression()? != 0;
             } else {
                 self.is_cursor_visible = false;
                 self.token_back();
@@ -559,7 +559,7 @@ impl Machine {
             let x = calc_mod(x as i32, self.screenw as i32);
             (x, y)
         };
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.screen_locate(x, y);
         Ok(())
     }
@@ -578,10 +578,10 @@ impl Machine {
     /// が反転フラグ。clkdiv (省電力時のクロック分周) は実機固有なので
     /// デスクトップ移植では読み飛ばすだけ。
     pub(super) fn command_video(&mut self) -> BResult<()> {
-        let video = self.token_expression()?;
+        let video = self.eval_expression()?;
         // 第 2 引数 (clkdiv) は実機専用。値は捨てるが構文だけ受理する。
-        let _clkdiv = self.token_option1(1)?;
-        self.token_end()?;
+        let _clkdiv = self.parse_optional_trailing_arg(1)?;
+        self.expect_statement_end()?;
 
         if video != 0 {
             let video = video.max(0);
@@ -602,35 +602,35 @@ impl Machine {
     }
 
     pub(super) fn command_scroll(&mut self) -> BResult<()> {
-        let dir = self.token_expression()?;
-        self.token_end()?;
+        let dir = self.eval_expression()?;
+        self.expect_statement_end()?;
         self.screen_scroll(dir as i32);
         Ok(())
     }
 
     pub(super) fn command_poke(&mut self) -> BResult<()> {
-        let mut n1 = self.token_expression()?;
+        let mut n1 = self.eval_expression()?;
         self.expect_token(TOKEN_COMMA)?;
-        let n2 = self.token_expression()?;
+        let n2 = self.eval_expression()?;
         self.poke(n1 as i32, n2 as u8);
         loop {
             let code = self.token_get().code;
             if code != TOKEN_COMMA {
                 self.token_back();
-                return self.token_end();
+                return self.expect_statement_end();
             }
             n1 = n1.wrapping_add(1);
-            let n2 = self.token_expression()?;
+            let n2 = self.eval_expression()?;
             self.poke(n1 as i32, n2 as u8);
         }
     }
 
     pub(super) fn command_copy(&mut self) -> BResult<()> {
-        let mut dst = self.token_expression()?;
+        let mut dst = self.eval_expression()?;
         self.expect_token(TOKEN_COMMA)?;
-        let mut src = self.token_expression()?;
+        let mut src = self.eval_expression()?;
         self.expect_token(TOKEN_COMMA)?;
-        let len = self.token_expression()?;
+        let len = self.eval_expression()?;
         if len > 0 {
             for _ in 0..len {
                 let v = self.peek(src as i32);
@@ -646,22 +646,22 @@ impl Machine {
                 src = src.wrapping_sub(1);
             }
         }
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_clp(&mut self) -> BResult<()> {
-        self.screen_clp();
-        self.token_end()
+        self.reset_pcg_to_font();
+        self.expect_statement_end()
     }
 
     pub(super) fn command_clk(&mut self) -> BResult<()> {
         self.key_clear_key();
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_srnd(&mut self) -> BResult<()> {
-        let n = self.token_expression()?;
-        self.token_end()?;
+        let n = self.eval_expression()?;
+        self.expect_statement_end()?;
         self.random_seed(n as i32);
         Ok(())
     }
@@ -673,8 +673,8 @@ impl Machine {
     /// `VER(2)` も同値を返す。実機の `keycode2ascii` 差し替え相当だが、
     /// フラッシュ永続化はメモリ内のみ。
     pub(super) fn command_kbd(&mut self) -> BResult<()> {
-        let n = self.token_expression()?;
-        self.token_end()?;
+        let n = self.eval_expression()?;
+        self.expect_statement_end()?;
         self.keyboard_id = if n == 0 { 0 } else { 1 };
         Ok(())
     }
@@ -692,13 +692,13 @@ impl Machine {
         let mut args = [0i32; 5];
         let mut count = 0usize;
         while count < args.len() {
-            args[count] = self.token_expression()? as i32;
+            args[count] = self.eval_expression()? as i32;
             count += 1;
             if self.token_get().code != TOKEN_COMMA {
                 break;
             }
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
         match count {
             2 => {
                 self.screen_pset(args[0], args[1], 1);
@@ -718,7 +718,7 @@ impl Machine {
 
     pub(super) fn command_save(&mut self) -> BResult<()> {
         let n = self.parse_optional_expr(self.lastfile as i16)?;
-        self.token_end()?;
+        self.expect_statement_end()?;
 
         let listsize = self.listsize as usize;
         let data: Vec<u8> = self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + listsize].to_vec();
@@ -745,12 +745,12 @@ impl Machine {
         if lrun {
             let code = self.token_get().code;
             if code == TOKEN_COMMA {
-                m = self.token_expression()?;
+                m = self.eval_expression()?;
             } else {
                 self.token_back();
             }
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
 
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.listsize = 0;
@@ -816,16 +816,16 @@ impl Machine {
         let mut endn = slot_count.saturating_sub(1) as i16;
         let mut startn = 0i16;
         if self.token_get_char() != 0 {
-            endn = self.token_expression()?;
+            endn = self.eval_expression()?;
             let t = self.token_get();
             if t.code != TOKEN_COMMA {
                 self.token_back();
             } else {
                 startn = endn;
-                endn = self.token_expression()?;
+                endn = self.eval_expression()?;
             }
         }
-        self.token_end()?;
+        self.expect_statement_end()?;
 
         const PEEK_LEN: usize = SCREEN_W;
         let mut buf = [0u8; PEEK_LEN];
@@ -859,7 +859,7 @@ impl Machine {
 
     pub(super) fn command_help(&mut self) -> BResult<()> {
         self.put_str("#000 CHAR\n#700 PCG\n#800 VAR\n#900 VRAM\n#C00 LIST\n");
-        self.token_end()
+        self.expect_statement_end()
     }
 
     /// RENUM [start[,step]]: 行番号を `start` から `step` 刻みで振り直し、
@@ -871,9 +871,9 @@ impl Machine {
     pub(super) fn command_renum(&mut self) -> BResult<()> {
         let mut start = 10i16;
         if self.token_get_char() != 0 {
-            start = self.token_expression()?;
+            start = self.eval_expression()?;
         }
-        let step = self.token_option1(10)?;
+        let step = self.parse_optional_trailing_arg(10)?;
         if start <= 0 || step <= 0 {
             return Err(ERR_ILLEGAL_ARGUMENT);
         }
@@ -940,7 +940,7 @@ impl Machine {
             match t.code {
                 TOKEN_NULL => break,
                 TOKEN_STRING => {
-                    self.token_skipstr();
+                    self.skip_string_literal();
                 }
                 TOKEN_REM_1 | TOKEN_REM_2 | TOKEN_ERROR => break,
                 TOKEN_GOTO | TOKEN_GOSUB_1 | TOKEN_GOSUB_2 => {
@@ -1014,16 +1014,16 @@ impl Machine {
         let (tone, len) = if code == TOKEN_NULL || code == TOKEN_ELSE {
             (10i16, 3i16)
         } else {
-            let tone = self.token_expression()?;
+            let tone = self.eval_expression()?;
             let len = if self.token_get().code == TOKEN_COMMA {
-                self.token_expression()?
+                self.eval_expression()?
             } else {
                 self.token_back();
                 3
             };
             (tone, len)
         };
-        self.token_end()?;
+        self.expect_statement_end()?;
         self.psg_beep(tone, len);
         Ok(())
     }
@@ -1034,15 +1034,15 @@ impl Machine {
         let mml = if code == TOKEN_NULL || code == TOKEN_ELSE {
             None
         } else {
-            Some(self.token_expression()? as i32)
+            Some(self.eval_expression()? as i32)
         };
         self.psg_play_mml(mml);
-        self.token_end()
+        self.expect_statement_end()
     }
 
     pub(super) fn command_tempo(&mut self) -> BResult<()> {
-        let tempo = self.token_expression()?;
-        self.token_end()?;
+        let tempo = self.eval_expression()?;
+        self.expect_statement_end()?;
         self.psg_tempo(tempo);
         Ok(())
     }
@@ -1055,9 +1055,9 @@ impl Machine {
             self.put_num(n2 as i32);
             return;
         }
-        let beam = Machine::beam(n2 as i32);
-        if (beam as i16) <= m {
-            for _ in 0..(m as u32 - beam) {
+        let decimal_width = Machine::decimal_width(n2 as i32);
+        if (decimal_width as i16) <= m {
+            for _ in 0..(m as u32 - decimal_width) {
                 self.put_chr(b' ');
             }
             self.put_num(n2 as i32);
@@ -1065,15 +1065,15 @@ impl Machine {
         }
         // 桁数オーバー: 下位 m 桁のみ出力 (符号は捨てる)
         let mut n2 = (n2 as i32).abs();
-        let mut beam = 5i32;
+        let mut decimal_width = 5i32;
         let mut d: u32 = 10000;
         while d > 0 {
             let c = (n2 as u32) / d;
-            if beam <= m as i32 {
+            if decimal_width <= m as i32 {
                 self.put_chr(c as u8 + b'0');
             }
             n2 -= (c * d) as i32;
-            beam -= 1;
+            decimal_width -= 1;
             d /= 10;
         }
     }

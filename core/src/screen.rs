@@ -36,7 +36,7 @@ impl Machine {
     }
 
     /// CLP: PCG をフォントの末尾 32 文字で初期化する。
-    pub fn screen_clp(&mut self) {
+    pub fn reset_pcg_to_font(&mut self) {
         let src = &CHAR_PATTERN_JP[(0x100 - SIZE_PCG) * 8..(0x100 * 8)];
         self.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG].copy_from_slice(src);
     }
@@ -66,7 +66,8 @@ impl Machine {
         self.screenh = SCREEN_H >> self.screen_big as u32;
     }
 
-    pub fn video_clt(&mut self) {
+    /// CLT: TICK() が返すフレームカウンタ (`frames`) と行カウンタ (`linecnt`) を 0 に戻す。
+    pub fn reset_tick_counters(&mut self) {
         self.frames = 0;
         self.linecnt = 0;
     }
