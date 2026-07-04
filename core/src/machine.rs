@@ -601,7 +601,7 @@ impl Machine {
     }
 
     /// カーソル描画幅。上書きモードは文字全体 (8px) を反転、挿入モードは
-    /// 左半分 (4px) のみ反転する (実機準拠)。true で全幅、false で左半分。
+    /// 左半分 (4px) のみ反転する。true で全幅、false で左半分。
     pub fn cursor_full_width(&self) -> bool {
         self.is_overwrite_mode
     }
@@ -672,7 +672,7 @@ impl Machine {
     }
 
     /// 対話編集用の制御コード入力 (矢印・BS・DEL・Home/End 等)。
-    /// プログラム実行中はカーソル移動・画面編集を行わず無視する (実機準拠)。
+    /// プログラム実行中はカーソル移動・画面編集を行わず無視する。
     /// 文字出力 (PRINT 等) は `put_chr`/`screen_putc` を直接使うため影響しない。
     pub fn input_control(&mut self, code: u8) {
         if self.is_executing() {

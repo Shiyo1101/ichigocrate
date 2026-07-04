@@ -165,7 +165,7 @@ impl Machine {
     /// 戻す。上書きモードは実機同様に自由移動とし、何もしない。
     fn cursor_snap_to_text(&mut self) {
         if self.is_overwrite_mode {
-            return; // 上書きモードは自由移動 (実機準拠)
+            return; // 上書きモードは自由移動
         }
         let w = self.screenw;
         let row = self.cursory as usize * w;

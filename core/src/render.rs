@@ -99,8 +99,7 @@ pub fn render_mono(buf: &mut [u8], machine: &Machine, state: &RenderState) {
                     if state.is_inverted {
                         on = !on;
                     }
-                    // カーソル反転。挿入モードは左半分 (col < 4) のみ反転して
-                    // 細いカーソルにする (実機準拠)。
+                    // カーソル反転。挿入モードは左半分 (col < 4) のみ反転して細いカーソルにする。
                     if cursor_here && (cursor_full || col < FONT_W / 2) {
                         on = !on;
                     }

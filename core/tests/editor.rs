@@ -240,7 +240,7 @@ fn cursor_free_move_in_overwrite_mode() {
 
     m.screen_locate(5, 1);
     m.screen_putc(CURSOR_UP);
-    // 上書きモードはスナップせず自由移動 (実機準拠)
+    // 上書きモードはスナップせず自由移動
     assert_eq!((m.cursorx, m.cursory), (5, 0));
 }
 

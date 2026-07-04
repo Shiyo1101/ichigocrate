@@ -395,7 +395,7 @@ impl IchigoApp {
     }
 
     fn execute_current_line(&mut self) {
-        // ENTER 押下時の改行を VRAM へ書き込む (実機準拠)
+        // ENTER 押下時の改行を VRAM へ書き込む
         self.machine.screen_putc(b'\n');
         let p = self.machine.screen_gets();
         // VRAM から行の長さを測り、生バイト列のスライスを取得する。String 経由
