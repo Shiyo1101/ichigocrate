@@ -279,10 +279,14 @@ impl IchigoJamRunner {
         self.exec_line_str("RUN");
     }
 
-    /// `basic_init` 相当。変数・プログラム・実行状態をリセットする。
+    /// `basic_init` 相当に加え画面もクリアする。本家 `basic_init` 自体は起動時
+    /// 専用で VRAM を触らないが (`command_reset` の実機リセットは別途 `video_init`
+    /// で画面も再初期化される)、外部公開 API としての `reset()` は「実機の RESET
+    /// ボタン相当」を期待されるため、この wasm ラッパー層でのみ画面クリアも行う。
     #[wasm_bindgen(js_name = "reset")]
     pub fn reset(&mut self) {
         self.machine.basic_init();
+        self.machine.screen_clear();
         self.is_running = false;
         self.input_origin = None;
         self.wait_until_ms = None;
