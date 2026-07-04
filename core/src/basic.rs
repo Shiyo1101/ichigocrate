@@ -166,6 +166,7 @@ impl Machine {
             TOKEN_CONT => self.command_cont()?,
             TOKEN_OK => self.command_ok()?,
             TOKEN_NEW => self.command_new()?,
+            TOKEN_RESET => self.command_reset()?,
             TOKEN_RUN => self.command_run()?,
             TOKEN_LET => self.command_let(TOKEN_COMMA)?,
             TOKEN_CLS => self.command_cls()?,

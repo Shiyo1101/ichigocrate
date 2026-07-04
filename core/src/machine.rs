@@ -17,6 +17,11 @@ use crate::ram::*;
 
 pub const PC_NULL: usize = usize::MAX;
 
+/// 起動時に表示する "IchigoJam BASIC ..." バナー (実機の `IJB_TITLE` 相当)。
+/// `web`/`app` の両ホストで同一文言が重複していたため、`power_on_reset` に
+/// 一本化した。
+const BOOT_BANNER: &str = "IchigoJam BASIC 1.4 (Rust port)\n";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasicResult {
     StopOrErr,
@@ -392,6 +397,27 @@ impl Machine {
         self.pcbreak = PC_NULL;
         self.listsize = 0;
         self.reset_pcg_to_font();
+    }
+
+    /// 実機の電源 ON/OFF による再起動と同一の効果を持つフル・リブート。
+    /// `basic_init` (変数・プログラムのみ) と異なり、LED・画面・カナ入力・
+    /// VIDEO 設定・音声・乱数シードなど電源断で失われるハードウェア状態も
+    /// すべて起動直後の既定値へ戻す。`storage` (SAVE/LOAD スロット) はフラッシュ
+    /// 相当で電源断でも消えないため、これだけ引き継ぐ。
+    ///
+    /// `BASIC` の `RESET` コマンド ([`crate::tokens::TOKEN_RESET`]) と、ホストが
+    /// 提供する外部リセット API はどちらもこの一箇所に集約する。
+    pub fn power_on_reset(&mut self) {
+        let storage = self.storage.take();
+        *self = Self::new();
+        self.storage = storage;
+
+        // `OK\n` は呼び出し元の文脈で出し方が異なる (BASIC の RESET 実行時は
+        // 既存の "Execute → OK" 表示に任せ、ホスト起動時/外部リセット API では
+        // 呼び出し側が明示的に出す) ため、ここではバナーのみ出力する。
+        for c in BOOT_BANNER.bytes() {
+            self.put_chr(c);
+        }
     }
 
     // ---- エラー ----

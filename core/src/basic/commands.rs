@@ -438,6 +438,13 @@ impl Machine {
         Ok(())
     }
 
+    /// 実機の電源 ON/OFF による再起動と同一 ([`Machine::power_on_reset`])。
+    pub(super) fn command_reset(&mut self) -> BResult<()> {
+        self.expect_statement_end()?;
+        self.power_on_reset();
+        Ok(())
+    }
+
     pub(super) fn command_list(&mut self) -> BResult<()> {
         let mut min = 0i16;
         let mut max = 0i32;

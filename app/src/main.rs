@@ -187,12 +187,8 @@ impl IchigoApp {
     ) -> Self {
         let mut machine = Machine::new();
         machine.set_storage(Box::new(DiskStorage::new()));
-        for c in "IchigoJam BASIC 1.4 (Rust port)\n".bytes() {
-            machine.put_chr(c);
-        }
-        for c in "OK\n".bytes() {
-            machine.put_chr(c);
-        }
+        machine.power_on_reset();
+        machine.put_str("OK\n");
         let now = Instant::now();
         Self {
             machine,
