@@ -3,7 +3,11 @@
 IchigoJam BASIC (子供向け教育用コンピュータ) の C ファームウェアを Rust に書き換え、デスクトップ向け GUI アプリ化したもの
 
 移植元: [github.com/IchigoJam/ichigojam-firm](https://github.com/IchigoJam/ichigojam-firm)
-コード中の「実機」という単語はIchigoJam ハードウェアを指しています
+
+> [!NOTE]
+> 「IchigoJam」は株式会社jig.jpの登録商標です。
+
+コード中の「実機」という単語はIchigoJam ハードウェアを指しています。
 
 ## 構成
 
