@@ -77,12 +77,8 @@ impl IchigoJamRunner {
             storage_prefix.unwrap_or_default(),
             persist.unwrap_or(true),
         )));
-        for c in "IchigoJam BASIC 1.4 (Rust port)\n".bytes() {
-            machine.put_chr(c);
-        }
-        for c in "OK\n".bytes() {
-            machine.put_chr(c);
-        }
+        machine.power_on_reset();
+        machine.put_str("OK\n");
 
         // onPrint の差分基準を現在 (起動バナー直後) に合わせ、バナーは流さない。
         let prev_vram = machine.vram().to_vec();
@@ -279,17 +275,21 @@ impl IchigoJamRunner {
         self.exec_line_str("RUN");
     }
 
-    /// `basic_init` 相当に加え画面もクリアする。本家 `basic_init` 自体は起動時
-    /// 専用で VRAM を触らないが (`command_reset` の実機リセットは別途 `video_init`
-    /// で画面も再初期化される)、外部公開 API としての `reset()` は「実機の RESET
-    /// ボタン相当」を期待されるため、この wasm ラッパー層でのみ画面クリアも行う。
+    /// 実機の RESET ボタン (電源 ON/OFF による再起動) 相当。BASIC の `RESET`
+    /// コマンドと同じ [`Machine::power_on_reset`] へ委譲するので、LED・画面・
+    /// カナ入力・VIDEO 設定なども含めて丸ごと起動直後の状態へ戻る。
     #[wasm_bindgen(js_name = "reset")]
     pub fn reset(&mut self) {
-        self.machine.basic_init();
-        self.machine.screen_clear();
+        self.machine.power_on_reset();
+        self.machine.put_str("OK\n");
         self.is_running = false;
         self.input_origin = None;
         self.wait_until_ms = None;
+
+        // onPrint の差分基準を現在 (起動バナー直後) に合わせ、バナーは流さない (new() と同じ扱い)。
+        self.prev_vram = self.machine.vram().to_vec();
+        self.out_x = self.machine.cursorx.max(0) as usize;
+        self.out_y = self.machine.cursory.max(0) as usize;
     }
 
     /// INKEY()/BTN() 用の物理キー押下。`code` は IchigoJam キーコード
