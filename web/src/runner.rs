@@ -34,8 +34,8 @@ pub struct IchigoJamRunner {
     next_tick_ms: f64,
     /// WAIT の実時間終了予定時刻 (ms)。
     wait_until_ms: Option<f64>,
-    /// 起動時刻 (ms)。カーソル点滅位相の基準。
-    start_ms: f64,
+    /// 起動時刻 (ms)。カーソル点滅位相の基準。`None` は初回 tick 未到達。
+    start_ms: Option<f64>,
     /// INPUT 対話入力待ち中の値開始 VRAM 座標 (cursorx, cursory)。
     input_origin: Option<(i32, i32)>,
     /// onPrint コールバック (画面出力ストリーミング)。未登録なら差分監視も行わない。
@@ -97,7 +97,7 @@ impl IchigoJamRunner {
             is_running: false,
             next_tick_ms: 0.0,
             wait_until_ms: None,
-            start_ms: 0.0,
+            start_ms: None,
             input_origin: None,
             on_print: None,
             on_error: None,
@@ -109,9 +109,8 @@ impl IchigoJamRunner {
 
     /// 1 フレーム進めて再描画する。`now_ms` は `performance.now()` を渡す。
     pub fn tick(&mut self, now_ms: f64) {
-        // 初回呼び出しで時間基準を確定する。
-        if self.start_ms == 0.0 {
-            self.start_ms = now_ms;
+        if self.start_ms.is_none() {
+            self.start_ms = Some(now_ms);
             self.next_tick_ms = now_ms;
         }
 
@@ -153,7 +152,7 @@ impl IchigoJamRunner {
 
         self.collect_output();
 
-        let blink = ((now_ms - self.start_ms) / 333.0) as u32;
+        let blink = ((now_ms - self.start_ms.unwrap_or(now_ms)) / 333.0) as u32;
         self.render(blink);
     }
 
