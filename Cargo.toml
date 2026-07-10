@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ichigojam-rs/core", "ichigojam-rs/app", "ichigojam-rs/web"]
+members = ["core", "app", "web"]
 
 [workspace.package]
 edition = "2021"
