@@ -9,7 +9,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-ROOT="$(cd ../.. && pwd)"
+ROOT="$(cd .. && pwd)"
 WASM="$ROOT/target/wasm32-unknown-unknown/release/ichigojam_web.wasm"
 
 cargo build --release --target wasm32-unknown-unknown -p ichigojam-web
