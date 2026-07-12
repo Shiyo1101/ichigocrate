@@ -29,7 +29,7 @@ ichigojam-rs/
 cargo run --release -p ichigojam-app
 
 # Web (WebAssembly)
-cd web && ./build.sh && python3 -m http.server   # http://localhost:8000/demo/
+cd web && bash ./build.sh && python3 -m http.server   # http://localhost:8000/demo/
 ```
 
 ## ライセンス
