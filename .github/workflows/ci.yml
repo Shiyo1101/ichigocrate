@@ -21,13 +21,14 @@ jobs:
             libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev \
             libxi-dev libxinerama-dev
 
-      - name: Install Rust
-        # toolchain input を指定しないことで rust-toolchain.toml のバージョンに
-        # 従わせる (ローカルと CI の rustc/clippy バージョンを固定し一致させる)。
-        uses: dtolnay/rust-toolchain@master
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Install toolchain from rust-toolchain.toml
+        # ubuntu-latest には rustup が標準搭載されている。専用アクションは使わず、
+        # rust-toolchain.toml が指定するバージョン (ローカルと同一) を明示的に
+        # インストールさせる (初回 cargo 呼び出しでの暗黙インストールに頼らない)。
+        run: rustup show
 
       - name: Build (workspace)
         run: cargo build --workspace --all-targets
