@@ -22,10 +22,9 @@ jobs:
             libxi-dev libxinerama-dev
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-          targets: wasm32-unknown-unknown
+        # toolchain input を指定しないことで rust-toolchain.toml のバージョンに
+        # 従わせる (ローカルと CI の rustc/clippy バージョンを固定し一致させる)。
+        uses: dtolnay/rust-toolchain@master
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
