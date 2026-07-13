@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (eframe/cpal)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev \
+            libxi-dev libxinerama-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install toolchain from rust-toolchain.toml
+        # ubuntu-latest には rustup が標準搭載されている。専用アクションは使わず、
+        # rust-toolchain.toml が指定するバージョン (ローカルと同一) を明示的に
+        # インストールさせる (初回 cargo 呼び出しでの暗黙インストールに頼らない)。
+        run: rustup show
+
+      - name: Build (workspace)
+        run: cargo build --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build ichigojam-web (wasm32 target)
+        run: cargo build -p ichigojam-web --target wasm32-unknown-unknown
