@@ -1,4 +1,4 @@
-//! IchigoJam-RS デスクトップフロントエンド (egui + cpal)
+//! IchigoCrate デスクトップフロントエンド (egui + cpal)
 //!
 //! - VRAM を画像化して描画
 //! - キーボード入力を IchigoJam の制御コードに変換してマシンに渡す
@@ -24,7 +24,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use eframe::{egui, App, CreationContext};
 use egui::{Color32, ColorImage, Key, TextureHandle, TextureOptions, Vec2};
 
-use ichigojam_core::{
+use ichigocrate_core::{
     exec_line_bytes, keycodes as kc,
     machine::{BasicResult, Storage, PC_NULL},
     render::{render_mono, RenderState, IMG_H, IMG_W},
@@ -58,7 +58,7 @@ fn main() -> eframe::Result<()> {
     let _audio = match start_audio(shared_tone.clone()) {
         Ok(s) => Some(s),
         Err(e) => {
-            eprintln!("[ichigojam] audio disabled: {e}");
+            eprintln!("[ichigocrate] audio disabled: {e}");
             None
         }
     };
@@ -69,11 +69,11 @@ fn main() -> eframe::Result<()> {
                 (IMG_W * PIXEL_SCALE) as f32 + 32.0,
                 (IMG_H * PIXEL_SCALE) as f32 + 32.0,
             ])
-            .with_title("IchigoJam BASIC (Rust port)"),
+            .with_title("IchigoCrate BASIC (Rust port)"),
         ..Default::default()
     };
     eframe::run_native(
-        "IchigoJam BASIC",
+        "IchigoCrate BASIC",
         native_opts,
         Box::new(move |cc| Ok(Box::new(IchigoApp::new(cc, shared_tone, _audio)))),
     )
@@ -112,7 +112,7 @@ fn filter_macos_stderr() {
 #[allow(dead_code)]
 fn filter_macos_stderr() {}
 
-/// `~/.ichigojam-rs/slot_NN.ijb` にスロット単位で SAVE/LOAD する実装。
+/// `~/.ichigocrate/slot_NN.ijb` にスロット単位で SAVE/LOAD する実装。
 #[derive(Debug)]
 struct DiskStorage {
     dir: PathBuf,
@@ -124,9 +124,9 @@ impl DiskStorage {
         let dir = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".ichigojam-rs");
+            .join(".ichigocrate");
         let _ = std::fs::create_dir_all(&dir);
-        eprintln!("[ichigojam] file storage: {}", dir.display());
+        eprintln!("[ichigocrate] file storage: {}", dir.display());
         Self { dir, slot_count: 16 }
     }
 
@@ -311,9 +311,9 @@ impl App for IchigoApp {
 
         if self.machine.is_kana_mode != self.was_kana_mode {
             let title = if self.machine.is_kana_mode {
-                "IchigoJam BASIC (Rust port) — KANA"
+                "IchigoCrate BASIC (Rust port) — KANA"
             } else {
-                "IchigoJam BASIC (Rust port)"
+                "IchigoCrate BASIC (Rust port)"
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.to_string()));
             self.was_kana_mode = self.machine.is_kana_mode;

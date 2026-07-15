@@ -6,7 +6,7 @@
 mod common;
 
 use common::{screen_text, var};
-use ichigojam_core::{exec_line, run_to_completion, BasicResult, Machine};
+use ichigocrate_core::{exec_line, run_to_completion, BasicResult, Machine};
 
 /// INPUT は即値の代入はせず、プロンプトを出して入力待ちに入る。
 /// 確定するまで変数は元の値のまま (代入は input_complete が担う)。

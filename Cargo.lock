@@ -1120,20 +1120,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
-name = "ichigojam-app"
+name = "ichigocrate-app"
 version = "0.1.0"
 dependencies = [
  "atomic_float",
  "cpal",
  "eframe",
  "egui",
- "ichigojam-core",
+ "ichigocrate-core",
  "os_pipe",
  "rustix 1.1.4",
 ]
 
 [[package]]
-name = "ichigojam-core"
+name = "ichigocrate-core"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
@@ -1141,12 +1141,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "ichigojam-web"
+name = "ichigocrate-web"
 version = "0.1.0"
 dependencies = [
  "base64",
  "console_error_panic_hook",
- "ichigojam-core",
+ "ichigocrate-core",
  "js-sys",
  "wasm-bindgen",
  "web-sys",

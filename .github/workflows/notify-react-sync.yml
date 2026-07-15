@@ -1,7 +1,7 @@
-name: Notify ichigojam-react
+name: Notify ichigocrate-react
 
-# web/ (または core/) の更新を Shiyo1101/ichigojam-react に repository_dispatch で
-# 即時通知する。実際の wasm ビルド・同期・PR 作成は ichigojam-react 側の
+# web/ (または core/) の更新を Shiyo1101/ichigocrate-react に repository_dispatch で
+# 即時通知する。実際の wasm ビルド・同期・PR 作成は ichigocrate-react 側の
 # .github/workflows/sync-wasm.yml が行う。
 
 on:
@@ -16,7 +16,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger sync-wasm in ichigojam-react
+      - name: Trigger sync-wasm in ichigocrate-react
         env:
           GH_TOKEN: ${{ secrets.REACT_REPO_DISPATCH_TOKEN }}
           SHA: ${{ github.sha }}
@@ -24,5 +24,5 @@ jobs:
           curl -sSf -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/Shiyo1101/ichigojam-react/dispatches \
+            https://api.github.com/repos/Shiyo1101/ichigocrate-react/dispatches \
             -d "{\"event_type\":\"sync-wasm\",\"client_payload\":{\"sha\":\"${SHA}\"}}"

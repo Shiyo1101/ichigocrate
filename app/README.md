@@ -1,11 +1,11 @@
-# ichigojam-app
+# ichigocrate-app
 
-[ichigojam-core](../core) を使った egui 製デスクトップフロントエンド。
+[ichigocrate-core](../core) を使った egui 製デスクトップフロントエンド。
 
 ## ビルドと実行
 
 ```bash
-cargo run --release -p ichigojam-app
+cargo run --release -p ichigocrate-app
 ```
 
 ## キーボードショートカット (IchigoJam 標準準拠)
@@ -28,7 +28,7 @@ cargo run --release -p ichigojam-app
 
 ## ファイル保存先
 
-`SAVE n` / `LOAD n` / `FILES` はホスト OS の `~/.ichigojam-rs/slot_NN.ijb` (NN はスロット番号 0-15) に LIST 領域のバイナリを直接読み書きする (`core::machine::Storage` の `DiskStorage` 実装)。
+`SAVE n` / `LOAD n` / `FILES` はホスト OS の `~/.ichigocrate/slot_NN.ijb` (NN はスロット番号 0-15) に LIST 領域のバイナリを直接読み書きする (`core::machine::Storage` の `DiskStorage` 実装)。
 
 ## 実装メモ
 

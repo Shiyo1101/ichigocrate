@@ -1,9 +1,9 @@
 //! ラスタライザ (`render_mono`) のビットマップ生成を検証する。
 //! VRAM/PCG/フォントの 1bpp 展開、反転、VIDEO オフ、PCG 文字の経路を固定する。
 
-use ichigojam_core::font::CHAR_PATTERN_JP;
-use ichigojam_core::render::{render_mono, RenderState, FONT_H, FONT_W, IMG_H, IMG_W};
-use ichigojam_core::Machine;
+use ichigocrate_core::font::CHAR_PATTERN_JP;
+use ichigocrate_core::render::{render_mono, RenderState, FONT_H, FONT_W, IMG_H, IMG_W};
+use ichigocrate_core::Machine;
 
 /// VIDEO 表示 ON・反転/カーソルなしの素の描画状態。
 fn plain() -> RenderState {

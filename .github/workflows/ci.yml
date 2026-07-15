@@ -39,5 +39,5 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Build ichigojam-web (wasm32 target)
-        run: cargo build -p ichigojam-web --target wasm32-unknown-unknown
+      - name: Build ichigocrate-web (wasm32 target)
+        run: cargo build -p ichigocrate-web --target wasm32-unknown-unknown

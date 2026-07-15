@@ -9,7 +9,7 @@
 mod common;
 
 use common::vram_line;
-use ichigojam_core::{
+use ichigocrate_core::{
     exec_line, exec_line_bytes, run_to_completion, Machine, OFFSET_RAMROM, OFFSET_RAM_LINEBUF,
     OFFSET_RAM_LIST, OFFSET_RAM_VRAM, SCREEN_W,
 };

@@ -4,8 +4,8 @@
 mod common;
 
 use common::{screen_text, vram_line};
-use ichigojam_core::keycodes::{CURSOR_DOWN, CURSOR_UP, INSERT_TOGGLE};
-use ichigojam_core::{exec_line, Machine, PC_NULL};
+use ichigocrate_core::keycodes::{CURSOR_DOWN, CURSOR_UP, INSERT_TOGGLE};
+use ichigocrate_core::{exec_line, Machine, PC_NULL};
 
 #[test]
 fn line_edit_and_list() {

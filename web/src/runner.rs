@@ -1,6 +1,6 @@
 //! `<canvas>` へ白黒画面をそのまま転送しながら VM を駆動する受動ランナー本体。
 
-use ichigojam_core::{
+use ichigocrate_core::{
     exec_line, exec_line_bytes, keycodes as kc,
     ram::IJB_SIZEOF_ARRAY,
     render::{render_mono, RenderState, IMG_H, IMG_W},
@@ -19,9 +19,9 @@ const FRAME_MS: f64 = 1000.0 / 60.0;
 /// 1 フレームで進める最大文数 (UI 凍結防止。ネイティブ版と同値)。
 const MAX_STEPS_PER_FRAME: usize = 2000;
 
-/// IchigoJam VM を 1 つ抱えるランナー。JS から `new IchigoJamRunner(canvas)` で生成。
+/// IchigoJam VM を 1 つ抱えるランナー。JS から `new IchigoCrateRunner(canvas)` で生成。
 #[wasm_bindgen]
-pub struct IchigoJamRunner {
+pub struct IchigoCrateRunner {
     machine: Machine,
     ctx: CanvasRenderingContext2d,
     /// 使い回す 1bpp バッファ (0=消灯 1=点灯)。
@@ -50,7 +50,7 @@ pub struct IchigoJamRunner {
 }
 
 #[wasm_bindgen]
-impl IchigoJamRunner {
+impl IchigoCrateRunner {
     /// `canvas` を描画先に紐付けてランナーを生成する。canvas の解像度は論理
     /// 画面サイズ (IMG_W×IMG_H) に設定し、拡大表示は CSS 側に委ねる。
     ///
@@ -62,7 +62,7 @@ impl IchigoJamRunner {
         canvas: &HtmlCanvasElement,
         storage_prefix: Option<String>,
         persist: Option<bool>,
-    ) -> Result<IchigoJamRunner, JsValue> {
+    ) -> Result<IchigoCrateRunner, JsValue> {
         console_error_panic_hook::set_once();
 
         canvas.set_width(IMG_W as u32);
@@ -85,7 +85,7 @@ impl IchigoJamRunner {
         let out_x = machine.cursorx.max(0) as usize;
         let out_y = machine.cursory.max(0) as usize;
 
-        Ok(IchigoJamRunner {
+        Ok(IchigoCrateRunner {
             machine,
             ctx,
             mono: vec![0; IMG_W * IMG_H],
@@ -229,18 +229,18 @@ impl IchigoJamRunner {
     }
 }
 
-/// 外部制御 API (`IchigoJamHandle`)。
+/// 外部制御 API (`IchigoCrateHandle`)。
 ///
 /// ブラウザからの直接キー入力に加え、JS/TS から入力・実行・状態取得を行うための
-/// 命令インターフェイス。すべて [`IchigoJamRunner`] のメソッドとして公開し、内部で
-/// `core` の公開関数へ委譲する。React ラッパはこの面を `IchigoJamHandle` という
+/// 命令インターフェイス。すべて [`IchigoCrateRunner`] のメソッドとして公開し、内部で
+/// `core` の公開関数へ委譲する。React ラッパはこの面を `IchigoCrateHandle` という
 /// ref 型として露出する。
 ///
 /// **実行モデルの制約:** プログラムは無限ループが常態なので「`exec()` の戻りで完了を
 /// 待つ」設計は採らない。`exec`/`run`/`loadProgram` は **停止中 (REPL) のみ受理**し、
 /// 実行中は `type`/`keyDown`/`break` だけが有効 (フレーム途中に割り込まない)。
 #[wasm_bindgen]
-impl IchigoJamRunner {
+impl IchigoCrateRunner {
     /// 文字列をタイプ入力する (キーボード入力と同等)。実行中は INKEY()/INPUT へ、
     /// 停止中は REPL 行編集へ流れる。ASCII 以外の文字は無視する (グラフィック文字を
     /// 流したいときは将来の bytes 版を使う想定)。
@@ -375,7 +375,7 @@ impl IchigoJamRunner {
     }
 }
 
-impl IchigoJamRunner {
+impl IchigoCrateRunner {
     /// プログラム実行を 1 フレーム分 (最大 MAX_STEPS_PER_FRAME 文) 進める。
     /// 完了・INPUT 待ち・WAIT 発火で打ち切る。tick() と exec 系で共有する。
     fn step_chunk(&mut self) {

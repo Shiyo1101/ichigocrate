@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use base64::Engine;
-use ichigojam_core::machine::Storage;
+use ichigocrate_core::machine::Storage;
 
 /// 提供するセーブスロット数 (実機 IchigoJam 準拠)。
 const SLOT_COUNT: u8 = 16;
