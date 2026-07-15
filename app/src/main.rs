@@ -69,7 +69,7 @@ fn main() -> eframe::Result<()> {
                 (IMG_W * PIXEL_SCALE) as f32 + 32.0,
                 (IMG_H * PIXEL_SCALE) as f32 + 32.0,
             ])
-            .with_title("IchigoCrate BASIC (Rust port)"),
+            .with_title("IchigoCrate BASIC"),
         ..Default::default()
     };
     eframe::run_native(
@@ -311,9 +311,9 @@ impl App for IchigoApp {
 
         if self.machine.is_kana_mode != self.was_kana_mode {
             let title = if self.machine.is_kana_mode {
-                "IchigoCrate BASIC (Rust port) — KANA"
+                "IchigoCrate BASIC — KANA"
             } else {
-                "IchigoCrate BASIC (Rust port)"
+                "IchigoCrate BASIC"
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.to_string()));
             self.was_kana_mode = self.machine.is_kana_mode;
