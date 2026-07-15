@@ -1,12 +1,12 @@
-# ichigojam-web
+# ichigocrate-web
 
-[ichigojam-core](../core) を使った WebAssembly フロントエンド。eframe は使わず canvas 2D へ直接 blit する軽量構成。
+[ichigocrate-core](../core) を使った WebAssembly フロントエンド。eframe は使わず canvas 2D へ直接 blit する軽量構成。
 
 ```
 web/
 ├── src/
 │   ├── lib.rs        # クレート docs + モジュール宣言 + 再エクスポート
-│   ├── runner.rs     # IchigoJamRunner: core を直接駆動し canvas へ blit
+│   ├── runner.rs     # IchigoCrateRunner: core を直接駆動し canvas へ blit
 │   ├── keymap.rs     # KeyboardEvent.code → HID/BTN コード変換
 │   ├── output.rs     # onPrint 用の VRAM 差分ヘルパ
 │   └── storage.rs    # WebStorage: SAVE/LOAD/FILES の localStorage 実装
@@ -27,13 +27,13 @@ python3 -m http.server                             # http://localhost:8000/demo/
 
 ビルド成果物 (`pkg/`) は ES モジュールとして `import` でき、React ラッパや CDN 配布の土台になる。wasm サイズは ~110KB (eframe を載せないため軽量)。
 
-## 外部制御 API (`IchigoJamHandle`)
+## 外部制御 API (`IchigoCrateHandle`)
 
-`IchigoJamRunner` は描画/キー入力に加え、JS/TS から実行・入力・状態取得を行う命令ハンドルを公開する (React ではこの面を `IchigoJamHandle` という ref 型で露出する)。`core` の公開関数へ委譲する薄いブリッジで、実行中プログラムも外部から駆動できる。
+`IchigoCrateRunner` は描画/キー入力に加え、JS/TS から実行・入力・状態取得を行う命令ハンドルを公開する (React ではこの面を `IchigoCrateHandle` という ref 型で露出する)。`core` の公開関数へ委譲する薄いブリッジで、実行中プログラムも外部から駆動できる。
 
 ```js
 // storagePrefix と persist は省略可 (既定 ""/true)。
-const r = new IchigoJamRunner(canvas, "demo-1", true);
+const r = new IchigoCrateRunner(canvas, "demo-1", true);
 r.exec("PRINT 1+2"); // 1 行を直接実行 (停止中のみ)
 r.loadProgram('10 ?"HI"\n20 GOTO 10');
 r.run(); // RUN。無限ループはフレーム実行へ委譲

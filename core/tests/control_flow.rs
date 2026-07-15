@@ -3,7 +3,7 @@
 mod common;
 
 use common::screen_text;
-use ichigojam_core::{exec_line, run_to_completion, Machine, PC_NULL};
+use ichigocrate_core::{exec_line, run_to_completion, Machine, PC_NULL};
 
 #[test]
 fn for_next_loop() {

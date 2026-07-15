@@ -3,7 +3,7 @@
 mod common;
 
 use common::{screen_text, vram_line};
-use ichigojam_core::{exec_line, exec_line_bytes, Machine};
+use ichigocrate_core::{exec_line, exec_line_bytes, Machine};
 
 #[test]
 fn print_simple_expression() {

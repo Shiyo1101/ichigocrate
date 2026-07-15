@@ -1,4 +1,4 @@
-# ichigojam-core
+# ichigocrate-core
 
 IchigoJam BASIC インタプリタ本体。`no_std` 対応で、画面描画やキー入力、ファイル保存といったホスト依存の処理は外部 ([app](../app), [web](../web)) に委譲する。
 
@@ -76,7 +76,7 @@ BASIC コア言語のコマンド一覧:
 実装メモ (実機と同じ挙動の説明は省略し、移植・ホスト境界に関わる点のみ。WAIT/ストレージの詳細は [アーキテクチャ要点](#アーキテクチャ要点) 参照):
 
 - 関数: ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS, SOUND, ANA (no-op), BTN, IN (no-op), SCR, VPEEK, POINT, CHR$/STR$/DEC$/HEX$/BIN$, SIN/COS, USR (no-op)
-- RESET — `Machine::power_on_reset` に委譲。`basic_init` と異なり LED・カナ入力・VIDEO 設定・PSG・乱数シードなど、電源断で失われるハードウェア相当の状態も含めて再起動する (SAVE/LOAD のストレージのみフラッシュ相当として保持)。ホストが提供する外部リセット API ([web](../web) の `IchigoJamHandle.reset()` 等) も同じ関数に委譲する
+- RESET — `Machine::power_on_reset` に委譲。`basic_init` と異なり LED・カナ入力・VIDEO 設定・PSG・乱数シードなど、電源断で失われるハードウェア相当の状態も含めて再起動する (SAVE/LOAD のストレージのみフラッシュ相当として保持)。ホストが提供する外部リセット API ([web](../web) の `IchigoCrateHandle.reset()` 等) も同じ関数に委譲する
 - INPUT — `Machine::is_awaiting_input` でホストが入力待ちを検知し、確定行を `input_complete` へ渡すことで実行を再開する
 - VIDEO — 拡大時は `screen_cols()`/`screen_rows()` 自体が縮む (`32/24 >> 拡大段階`) ため、折り返し・カーソル可動範囲の計算はホスト側もこの値を参照する必要がある
 - KBD — 実機はフラッシュへ永続化するが本移植はメモリ内のみ (`Machine::new()` の既定は JA)
@@ -93,7 +93,7 @@ BASIC コア言語のコマンド一覧:
 ## テスト
 
 ```bash
-cargo test -p ichigojam-core
+cargo test -p ichigocrate-core
 ```
 
 テストは機能ごとにファイル分割し、共通ヘルパー (`screen_text` / `vram_line` / `var`) は `tests/common/mod.rs` に集約している (計 93 件)。

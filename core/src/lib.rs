@@ -1,4 +1,4 @@
-//! ichigojam-core: IchigoJam BASIC を Rust に移植した仮想マシン本体。
+//! ichigocrate-core: IchigoJam BASIC を Rust に移植した仮想マシン本体。
 //!
 //! - 言語: 日本語フォント版 (LANG_JP)
 //! - バージョン: 1.4.3 ベース

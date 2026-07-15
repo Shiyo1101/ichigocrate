@@ -3,7 +3,7 @@
 //! 物理キー位置 (`KeyboardEvent.code`) で keymap を引くことで、`KBD` コマンドの
 //! US/JA 切替が OS の入力レイアウトに依らず効くようにする入り口。
 
-use ichigojam_core::keycodes as kc;
+use ichigocrate_core::keycodes as kc;
 
 /// keymap の戻り値のうち REPL 編集を進める制御コード群 (input_control 経由)。
 pub(crate) fn is_edit_control_code(c: u8) -> bool {

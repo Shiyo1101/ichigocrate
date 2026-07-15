@@ -5,8 +5,8 @@
 mod common;
 
 use common::{screen_text, var, vram_line};
-use ichigojam_core::ram::{OFFSET_RAM_PCG, SIZE_RAM_PCG};
-use ichigojam_core::{
+use ichigocrate_core::ram::{OFFSET_RAM_PCG, SIZE_RAM_PCG};
+use ichigocrate_core::{
     exec_line, exec_line_bytes, Machine, OFFSET_RAMROM, OFFSET_RAM_LIST, OFFSET_RAM_VRAM, PC_NULL,
 };
 

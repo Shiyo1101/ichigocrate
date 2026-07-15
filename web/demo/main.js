@@ -1,15 +1,15 @@
-// IchigoJam-RS wasm デモのエントリ。ビルド済み pkg/ のグルーを読み込み、
+// IchigoCrate wasm デモのエントリ。ビルド済み pkg/ のグルーを読み込み、
 // canvas へ 1 インスタンスを貼って rAF とキーイベントを配線する。
-import init, { IchigoJamRunner } from "../pkg/ichigojam_web.js";
+import init, { IchigoCrateRunner } from "../pkg/ichigocrate_web.js";
 
 await init();
 
 const canvas = document.getElementById("screen");
 // storagePrefix でこのデモ用にスロットを分離 (persist=true: localStorage)。
-const runner = new IchigoJamRunner(canvas, "demo", true);
+const runner = new IchigoCrateRunner(canvas, "demo", true);
 // デモ用: コンソールから命令ハンドル (type/exec/run/getScreenText 等) を試せる。
 window.runner = runner;
-window.IchigoJamRunner = IchigoJamRunner;
+window.IchigoCrateRunner = IchigoCrateRunner;
 canvas.focus();
 
 // onPrint: 画面出力ストリームを右のログへ追記する。

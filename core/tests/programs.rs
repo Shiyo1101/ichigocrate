@@ -3,7 +3,7 @@
 mod common;
 
 use common::{screen_text, vram_line};
-use ichigojam_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM};
+use ichigocrate_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM};
 
 #[test]
 fn gosub_return() {
@@ -83,27 +83,27 @@ fn nested_if_else() {
 
 #[test]
 fn wait_and_goto_loop_yields() {
-    // 元プログラム: 10 ?"ICHIGOJAM RS" / 20 WAIT60 / 30 GOTO10
+    // 元プログラム: 10 ?"ICHIGOCRATE" / 20 WAIT60 / 30 GOTO10
     // RUN 後、basic_execute は LIST へ移行した時点で呼出元へ制御を返すこと、
     // WAIT で wait_frames がセットされて以降の自動進行が止まることを確認。
     let mut m = Machine::new();
-    let _ = exec_line(&mut m, "10 ?\"ICHIGOJAM RS\"");
+    let _ = exec_line(&mut m, "10 ?\"ICHIGOCRATE\"");
     let _ = exec_line(&mut m, "20 WAIT60");
     let _ = exec_line(&mut m, "30 GOTO10");
     let _ = exec_line(&mut m, "RUN");
     // 1 周目: PRINT 実行 → WAIT で stop → wait_frames が 60
-    while m.wait_frames == 0 && m.pc != ichigojam_core::PC_NULL {
+    while m.wait_frames == 0 && m.pc != ichigocrate_core::PC_NULL {
         let _ = m.basic_step();
     }
     assert_eq!(m.wait_frames, 60);
     // 1 行目が出力されていること
     let t = screen_text(&m);
-    assert!(t.contains("ICHIGOJAM RS"), "{t}");
+    assert!(t.contains("ICHIGOCRATE"), "{t}");
 }
 
 #[test]
 fn save_load_roundtrip() {
-    use ichigojam_core::machine::Storage;
+    use ichigocrate_core::machine::Storage;
     #[derive(Debug)]
     struct MemStore { data: Vec<u8>, has: bool }
     impl Storage for MemStore {
@@ -190,7 +190,7 @@ fn error_message_printed_at_repl() {
     let mut m = Machine::new();
     let r = exec_line(&mut m, "?1/0");
     assert!(
-        matches!(r, Err(ichigojam_core::BasicError::DivideByZero)),
+        matches!(r, Err(ichigocrate_core::BasicError::DivideByZero)),
         "{r:?}"
     );
     assert!(screen_text(&m).contains("Divide by 0"), "{}", screen_text(&m));
@@ -224,7 +224,7 @@ fn poke_peek_pcg() {
 fn save_load_preserves_graphic_chars() {
     // バグ報告: プログラム記述後 RUN すると特殊文字が別の文字に変わる。
     // SAVE/LOAD ラウンドトリップでも 0x80-0xFF が保持されることを確認する。
-    use ichigojam_core::{exec_line_bytes, machine::Storage};
+    use ichigocrate_core::{exec_line_bytes, machine::Storage};
     #[derive(Debug)]
     struct MemStore { data: Vec<u8>, has: bool }
     impl Storage for MemStore {
@@ -264,7 +264,7 @@ fn save_load_preserves_graphic_chars() {
 #[test]
 fn list_command_outputs_graphic_chars_unchanged() {
     // LIST 表示で文字列リテラル内のグラフィック文字がそのまま VRAM へ書き出される。
-    use ichigojam_core::exec_line_bytes;
+    use ichigocrate_core::exec_line_bytes;
     let mut m = Machine::new();
     let _ = exec_line_bytes(&mut m, b"10 ?\"\xea\xff\"");
     let _ = exec_line_bytes(&mut m, b"LIST");

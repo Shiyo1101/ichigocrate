@@ -3,7 +3,7 @@
 mod common;
 
 use common::screen_text;
-use ichigojam_core::{exec_line, Machine};
+use ichigocrate_core::{exec_line, Machine};
 
 /// RENUM: 行番号を再採番する。GOTO/GOSUB を含まないプレーン行で行番号自体が
 /// 振り直されること。参照書換は別テスト

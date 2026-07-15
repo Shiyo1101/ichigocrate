@@ -7,8 +7,8 @@
 
 #![allow(dead_code)]
 
-use ichigojam_core::ram::IJB_SIZEOF_ARRAY;
-use ichigojam_core::{Machine, OFFSET_RAM_VRAM, SCREEN_W};
+use ichigocrate_core::ram::IJB_SIZEOF_ARRAY;
+use ichigocrate_core::{Machine, OFFSET_RAM_VRAM, SCREEN_W};
 
 /// VRAM 全体 (32x24) を文字列化する。空セル (0) は空白、印字可能 ASCII は
 /// そのまま、それ以外 (グラフィック文字など) は `?` に潰す。出力に特定文字列が
