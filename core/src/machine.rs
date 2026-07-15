@@ -18,10 +18,11 @@ use crate::ram::*;
 pub const PC_NULL: usize = usize::MAX;
 
 /// 起動時に表示する "IchigoCrate BASIC ..." バナー (実機の `IJB_TITLE` 相当だが、
-/// 商標である "IchigoJam" ではなく本プロジェクト名 "IchigoCrate" を用いる)。
+/// 商標である "IchigoJam" ではなく本プロジェクト名 "IchigoCrate" を用い、
+/// バージョンも本プロジェクト独自の 1.0 から始める)。
 /// `web`/`app` の両ホストで同一文言が重複していたため、`power_on_reset` に
 /// 一本化した。
-const BOOT_BANNER: &str = "IchigoCrate BASIC 1.4 (Rust port)\n";
+const BOOT_BANNER: &str = "IchigoCrate BASIC 1.0\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BasicResult {
