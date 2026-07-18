@@ -14,9 +14,9 @@ fn for_next_loop() {
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
     let t = screen_text(&m);
-    assert!(t.contains("1"), "{t}");
-    assert!(t.contains("2"), "{t}");
-    assert!(t.contains("3"), "{t}");
+    assert!(t.contains('1'), "{t}");
+    assert!(t.contains('2'), "{t}");
+    assert!(t.contains('3'), "{t}");
 }
 
 #[test]

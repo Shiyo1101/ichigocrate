@@ -682,7 +682,7 @@ impl Machine {
     pub(super) fn command_kbd(&mut self) -> BResult<()> {
         let n = self.eval_expression()?;
         self.expect_statement_end()?;
-        self.keyboard_id = if n == 0 { 0 } else { 1 };
+        self.keyboard_id = u8::from(n != 0);
         Ok(())
     }
 
@@ -819,7 +819,7 @@ impl Machine {
     }
 
     pub(super) fn command_files(&mut self) -> BResult<()> {
-        let slot_count = self.storage.as_ref().map(|s| s.slot_count()).unwrap_or(0);
+        let slot_count = self.storage.as_ref().map_or(0, |s| s.slot_count());
         let mut endn = slot_count.saturating_sub(1) as i16;
         let mut startn = 0i16;
         if self.token_get_char() != 0 {

@@ -52,7 +52,7 @@ fn hex_and_bin() {
     let _ = exec_line(&mut m, "?`101");
     let t = screen_text(&m);
     assert!(t.contains("255"), "{t}");
-    assert!(t.contains("5"), "{t}");
+    assert!(t.contains('5'), "{t}");
 }
 
 /// HEX$ で 0xFF を 2 桁指定で出力すると "FF" になる。

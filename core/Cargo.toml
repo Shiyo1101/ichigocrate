@@ -10,3 +10,6 @@ path = "src/lib.rs"
 [dependencies]
 arrayvec = "0.7"
 thiserror = "2"
+
+[lints]
+workspace = true
