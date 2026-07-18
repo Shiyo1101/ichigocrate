@@ -391,7 +391,14 @@ impl IchigoCrateRunner {
             if let Some(res) = self.machine.basic_step() {
                 self.is_running = false;
                 match res {
-                    BasicResult::Execute => self.machine.put_str("OK\n"),
+                    // 即時実行の完了はここが本当の到達点 (pc は PC_NULL に戻らず
+                    // LINEBUF の終端を指したまま返るため)。F1 (CLS) の "OK" 抑止
+                    // もここで判定しないと効かない。
+                    BasicResult::Execute => {
+                        if !std::mem::take(&mut self.suppress_next_ok) {
+                            self.machine.put_str("OK\n");
+                        }
+                    }
                     BasicResult::Input => self.begin_input(),
                     BasicResult::StopOrErr => {
                         if let Some(e) = self.machine.last_error() {
@@ -405,7 +412,9 @@ impl IchigoCrateRunner {
             }
             if self.machine.pc == PC_NULL {
                 self.is_running = false;
-                self.machine.put_str("OK\n");
+                if !std::mem::take(&mut self.suppress_next_ok) {
+                    self.machine.put_str("OK\n");
+                }
                 break;
             }
         }
@@ -462,15 +471,16 @@ impl IchigoCrateRunner {
     /// なので、即時文はここで 1 フレーム分まで同期実行して完了させる。終わらなければ
     /// (RUN の無限ループ等) is_running を立ててフレーム側へ委譲し、ブラウザを固めない。
     fn finish_executed(&mut self) {
-        // どの分岐に転んでも取り消しておく (取り忘れによる誤抑止を防ぐ)
-        let suppress_ok = std::mem::take(&mut self.suppress_next_ok);
         if self.machine.pc != PC_NULL {
+            // 即時実行の完了もここを通る (pc は PC_NULL に戻らず LINEBUF の終端を
+            // 指したまま返るため)。実際の完了検知・"OK" 表示・suppress_next_ok
+            // の消費は step_chunk 側で行う。
             self.is_running = true;
             self.machine.is_program_running = true;
             if self.wait_until_ms.is_none() {
                 self.step_chunk();
             }
-        } else if !suppress_ok {
+        } else if !std::mem::take(&mut self.suppress_next_ok) {
             self.machine.put_str("OK\n");
         }
     }

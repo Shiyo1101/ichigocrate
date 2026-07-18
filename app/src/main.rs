@@ -275,7 +275,14 @@ impl App for IchigoApp {
                     if let Some(res) = self.machine.basic_step() {
                         self.is_running = false;
                         match res {
-                            BasicResult::Execute => self.machine.put_str("OK\n"),
+                            // 即時実行の完了はここが本当の到達点 (pc は PC_NULL に戻らず
+                            // LINEBUF 内の終端を指したまま返ってくるため)。F1 (CLS) の
+                            // "OK" 抑止もここで判定しないと効かない。
+                            BasicResult::Execute => {
+                                if !std::mem::take(&mut self.suppress_next_ok) {
+                                    self.machine.put_str("OK\n");
+                                }
+                            }
                             // INPUT 文が入力待ち → 対話入力モードへ。実行再開は
                             // 入力確定時 (complete_input) に is_running を立て直す。
                             BasicResult::Input => self.begin_input(),
@@ -286,7 +293,9 @@ impl App for IchigoApp {
                     }
                     if self.machine.pc == PC_NULL {
                         self.is_running = false;
-                        self.machine.put_str("OK\n");
+                        if !std::mem::take(&mut self.suppress_next_ok) {
+                            self.machine.put_str("OK\n");
+                        }
                         break;
                     }
                 }
@@ -415,14 +424,15 @@ impl IchigoApp {
         self.machine.is_esc_pressed = false;
         // Machine 借用のため一旦スライスをローカルにコピー
         let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
-        // どの分岐に転んでも取り消しておく (取り忘れによる誤抑止を防ぐ)
-        let suppress_ok = std::mem::take(&mut self.suppress_next_ok);
         match exec_line_bytes(&mut self.machine, &line) {
             Ok(LineOutcome::Executed) => {
                 if self.machine.pc != PC_NULL {
-                    // RUN 後など継続実行が必要
+                    // RUN 後など継続実行が必要。即時実行の完了もここを通る
+                    // (pc は PC_NULL に戻らず LINEBUF の終端を指したまま返る
+                    // ため)。実際の完了検知・"OK" 表示は update() の
+                    // is_running 処理ループ側で行う。
                     self.is_running = true;
-                } else if !suppress_ok {
+                } else if !std::mem::take(&mut self.suppress_next_ok) {
                     self.machine.put_str("OK\n");
                 }
             }
