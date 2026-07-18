@@ -25,25 +25,26 @@ use eframe::{egui, App, CreationContext};
 use egui::{Color32, ColorImage, Key, TextureHandle, TextureOptions, Vec2};
 
 use ichigocrate_core::{
-    exec_line_bytes, keycodes as kc,
-    machine::{BasicResult, Storage, PC_NULL},
+    keycodes as kc,
+    machine::Storage,
     render::{render_mono, RenderState, IMG_H, IMG_W},
-    LineOutcome, Machine, OFFSET_RAM_VRAM, SIZE_RAM_VRAM,
+    session::Session,
+    Machine,
 };
 
 const PIXEL_SCALE: usize = 3;
 
-/// IchigoJam 標準準拠の F キー割当て。3 番目の bool は「Enter まで自動投入するか」。
-const FKEY_BINDINGS: &[(Key, &str, bool)] = &[
-    (Key::F1, "CLS", true),
-    (Key::F2, "LOAD", false),
-    (Key::F3, "SAVE", false),
-    (Key::F4, "LIST", true),
-    (Key::F5, "RUN", true),
-    (Key::F6, "?FREE()", true),
-    (Key::F7, "?VER()", true),
-    (Key::F8, "VIDEO", false),
-    (Key::F9, "FILES", true),
+/// F1-F9 に対応する egui キー。割当コマンドは core の session 側が持つ。
+const FKEYS: [Key; 9] = [
+    Key::F1,
+    Key::F2,
+    Key::F3,
+    Key::F4,
+    Key::F5,
+    Key::F6,
+    Key::F7,
+    Key::F8,
+    Key::F9,
 ];
 
 
@@ -55,7 +56,7 @@ fn main() -> eframe::Result<()> {
     filter_macos_stderr();
 
     let shared_tone = Arc::new(AtomicF32::new(0.0));
-    let _audio = match start_audio(shared_tone.clone()) {
+    let audio = match start_audio(shared_tone.clone()) {
         Ok(s) => Some(s),
         Err(e) => {
             eprintln!("[ichigocrate] audio disabled: {e}");
@@ -75,7 +76,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "IchigoCrate BASIC",
         native_opts,
-        Box::new(move |cc| Ok(Box::new(IchigoApp::new(cc, shared_tone, _audio)))),
+        Box::new(move |cc| Ok(Box::new(IchigoApp::new(cc, shared_tone, audio)))),
     )
 }
 
@@ -122,8 +123,7 @@ struct DiskStorage {
 impl DiskStorage {
     fn new() -> Self {
         let dir = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."))
+            .map_or_else(|| PathBuf::from("."), PathBuf::from)
             .join(".ichigocrate");
         let _ = std::fs::create_dir_all(&dir);
         eprintln!("[ichigocrate] file storage: {}", dir.display());
@@ -131,7 +131,7 @@ impl DiskStorage {
     }
 
     fn path(&self, slot: u8) -> PathBuf {
-        self.dir.join(format!("slot_{:02}.ijb", slot))
+        self.dir.join(format!("slot_{slot:02}.ijb"))
     }
 }
 
@@ -159,28 +159,16 @@ impl Storage for DiskStorage {
 }
 
 struct IchigoApp {
-    machine: Machine,
+    /// 実行状態機械 (REPL/RUN/INPUT/WAIT) を持つ core 共通セッション
+    session: Session,
     /// VRAM → テクスチャ描画器 (バッファ使い回し + 差分判定で再描画を抑える)
     renderer: Renderer,
-    /// Machine.is_program_running と同期するホスト側のミラー
-    is_running: bool,
     shared_tone: Arc<AtomicF32>,
     _audio_stream: Option<cpal::Stream>,
-    /// カーソル点滅の基準
+    /// カーソル点滅と Session へ渡す経過 ms の基準
     start_time: Instant,
-    /// 次に 60Hz tick (PSG 等) を駆動する時刻
-    next_tick_time: Instant,
-    /// 実時間ベースの WAIT 終了予定時刻
-    wait_until: Option<Instant>,
     /// タイトル更新差分用に持つ直前フレームのカナモード状態
     was_kana_mode: bool,
-    /// INPUT 文の対話入力待ち中なら、入力値の開始 VRAM 座標 (プロンプト直後の
-    /// cursorx, cursory)。Enter 確定時にこの位置から値テキストを読み取る。
-    input_origin: Option<(i32, i32)>,
-    /// 次回の `execute_current_line` で "OK" 表示を抑止するフラグ。F1 (CLS)
-    /// ショートカットは画面を消すのが目的なので、直後に "OK" が出ると空白画面
-    /// にならず UX を損なう。
-    suppress_next_ok: bool,
 }
 
 impl IchigoApp {
@@ -191,21 +179,13 @@ impl IchigoApp {
     ) -> Self {
         let mut machine = Machine::new();
         machine.set_storage(Box::new(DiskStorage::new()));
-        machine.power_on_reset();
-        machine.put_str("OK\n");
-        let now = Instant::now();
         Self {
-            machine,
+            session: Session::new(machine),
             renderer: Renderer::new(),
-            is_running: false,
             shared_tone,
             _audio_stream: audio_stream,
-            start_time: now,
-            next_tick_time: now,
-            wait_until: None,
+            start_time: Instant::now(),
             was_kana_mode: false,
-            input_origin: None,
-            suppress_next_ok: false,
         }
     }
 }
@@ -214,132 +194,53 @@ impl App for IchigoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
 
-        // 60Hz tick (PSG / frames) を実時間に同期して必要回数だけ進める
-        let mut tick_iterations = 0;
-        while self.next_tick_time <= now && tick_iterations < 8 {
-            self.machine.frames = self.machine.frames.wrapping_add(1);
-            self.machine.psg_tick();
-            self.next_tick_time += FRAME;
-            tick_iterations += 1;
-        }
-        // 大きく遅れた場合は追いつくのを諦めて基準時刻をリセット
-        if self.next_tick_time + FRAME * 8 < now {
-            self.next_tick_time = now;
-        }
-
-        self.sync_machine_before_input();
-        process_keyboard(ctx, &mut self.machine);
+        process_keyboard(ctx, &mut self.session);
 
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.machine.is_esc_pressed = true;
+            self.session.on_escape();
         }
 
-        // F キー: run=true は ENTER まで自動投入、false は文字挿入のみ
-        // (ユーザが続けてスロット番号等を入力できるよう待機)。
-        // INPUT の入力待ち中は値編集を妨げないため無効化する。
-        if !self.is_running && self.input_origin.is_none() {
-            let fkey = ctx.input(|i| {
-                FKEY_BINDINGS
-                    .iter()
-                    .find(|(k, _, _)| i.key_pressed(*k))
-                    .map(|(_, cmd, run)| (*cmd, *run))
-            });
-            if let Some((cmd, run)) = fkey {
-                self.type_fkey_command(cmd, run);
-            }
+        // F1-F9 のコマンド割当。受理条件 (REPL 待機中のみ) は Session が判定する。
+        let fkey = ctx.input(|i| FKEYS.iter().position(|k| i.key_pressed(*k)));
+        if let Some(idx) = fkey {
+            let _ = self.session.press_fkey(idx as u8 + 1);
         }
 
-        // WAIT 期限チェック (実時間ベース)
-        if let Some(deadline) = self.wait_until {
-            if now >= deadline {
-                self.wait_until = None;
-            }
-        }
-        // BASIC 側で WAIT が積まれていたら実時間の期限に変換
-        if self.machine.wait_frames > 0 {
-            let extra = FRAME * self.machine.wait_frames;
-            let base = self.wait_until.unwrap_or(now);
-            self.wait_until = Some(base + extra);
-            self.machine.wait_frames = 0;
-        }
-
-        if self.is_running {
-            // WAIT 中は basic_step を呼ばず実時間の経過を待つ。それ以外は
-            // 1 フレームあたり最大 N 文まで進めて UI 凍結を防ぐ。
-            if self.wait_until.is_none() {
-                const MAX_STEPS_PER_FRAME: usize = 2000;
-                for _ in 0..MAX_STEPS_PER_FRAME {
-                    if self.machine.wait_frames > 0 {
-                        break; // ステップ中に WAIT が発火 → 次フレームへ
-                    }
-                    if let Some(res) = self.machine.basic_step() {
-                        self.is_running = false;
-                        match res {
-                            // 即時実行の完了はここが本当の到達点 (pc は PC_NULL に戻らず
-                            // LINEBUF 内の終端を指したまま返ってくるため)。F1 (CLS) の
-                            // "OK" 抑止もここで判定しないと効かない。
-                            BasicResult::Execute => {
-                                if !std::mem::take(&mut self.suppress_next_ok) {
-                                    self.machine.put_str("OK\n");
-                                }
-                            }
-                            // INPUT 文が入力待ち → 対話入力モードへ。実行再開は
-                            // 入力確定時 (complete_input) に is_running を立て直す。
-                            BasicResult::Input => self.begin_input(),
-                            _ => {}
-                        }
-                        self.machine.is_esc_pressed = false;
-                        break;
-                    }
-                    if self.machine.pc == PC_NULL {
-                        self.is_running = false;
-                        if !std::mem::take(&mut self.suppress_next_ok) {
-                            self.machine.put_str("OK\n");
-                        }
-                        break;
-                    }
-                }
-            }
-        } else if self.input_origin.is_some() {
-            // INPUT 入力待ち: ESC で中断、Enter で値を確定して実行再開。
-            if self.machine.is_esc_pressed {
-                self.cancel_input();
-            } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                self.complete_input();
-            }
-        } else if ctx.input(|i| i.key_pressed(Key::Enter)) {
-            self.execute_current_line();
-        }
+        // 60Hz tick・WAIT 期限・実行中プログラムの継続はすべて Session が担う。
+        // エラーは VRAM に表示済みなのでネイティブ版では戻り値を使わない。
+        let now_ms = (now - self.start_time).as_secs_f64() * 1000.0;
+        let _ = self.session.tick(now_ms);
 
         self.shared_tone
-            .store(self.machine.current_tone_hz, Ordering::Relaxed);
+            .store(self.session.machine.current_tone_hz, Ordering::Relaxed);
 
         // 再描画頻度をマシンの状態で決める。プログラム実行中・発音中・WAIT
         // 待機中は時間進行が必要なので 60Hz、それ以外の REPL 待機中はカーソル
         // 点滅に追従できれば十分なので低頻度に落とす (入力時は egui が自動で
         // 再描画するため取りこぼしはない)。ProMotion 等の高リフレッシュレート
         // でもこの間隔が再描画の上限になる。
-        let needs_realtime =
-            self.is_running || self.machine.psg_sound() || self.wait_until.is_some();
+        let needs_realtime = self.session.is_running()
+            || self.session.machine.psg_sound()
+            || self.session.is_waiting();
         ctx.request_repaint_after(if needs_realtime { FRAME } else { IDLE_REPAINT });
 
-        if self.machine.is_kana_mode != self.was_kana_mode {
-            let title = if self.machine.is_kana_mode {
+        if self.session.machine.is_kana_mode != self.was_kana_mode {
+            let title = if self.session.machine.is_kana_mode {
                 "IchigoCrate BASIC — KANA"
             } else {
                 "IchigoCrate BASIC"
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.to_string()));
-            self.was_kana_mode = self.machine.is_kana_mode;
+            self.was_kana_mode = self.session.machine.is_kana_mode;
         }
 
         // カーソル点滅は実時間 (~333ms 周期) で算出 (リフレッシュ非依存)
         let cursor_blink_phase =
             ((now - self.start_time).as_millis() / 333) as u32;
-        self.renderer.sync(ctx, &self.machine, cursor_blink_phase);
+        self.renderer.sync(ctx, &self.session.machine, cursor_blink_phase);
 
         // 実機 LED の代替: LED 1 で赤い枠、LED 0 で透明
-        let border_color = if self.machine.is_led_on {
+        let border_color = if self.session.machine.is_led_on {
             Color32::from_rgb(230, 40, 40)
         } else {
             Color32::TRANSPARENT
@@ -373,113 +274,6 @@ impl App for IchigoApp {
                     });
                 }
             });
-    }
-}
-
-impl IchigoApp {
-    /// キーボード入力を処理する前に、マシン側の状態をフレームの実行状況へ
-    /// 同期する。
-    ///
-    /// `is_program_running` を立てることで `input_putc`/`input_control` が実行中の
-    /// 対話編集を無視する。判定に `pc` を使えないのが要点で、`pc` は STOP/ESC
-    /// ブレーク後も CONT 用に残るため、停止しても入力が復活しなくなってしまう。
-    /// 非実行 (REPL) 中は挿入/上書きモードを同期しカーソルを表示する。
-    fn sync_machine_before_input(&mut self) {
-        self.machine.is_program_running = self.is_running;
-        if !self.is_running {
-            self.machine.sync_insert_mode();
-            self.machine.is_cursor_visible = true;
-        }
-    }
-
-    /// F キーで指定コマンドを VRAM に挿入する。`run` が true なら直ちに実行、
-    /// false ならカーソルだけ残し、ユーザが引数 (スロット番号など) を続けて
-    /// 入力できるようにする。
-    fn type_fkey_command(&mut self, cmd: &str, run: bool) {
-        for b in cmd.bytes() {
-            self.machine.screen_putc(b);
-        }
-        if run {
-            // CLS 直後は画面を空白のまま保ちたいので "OK" 表示を抑止する。
-            self.suppress_next_ok = cmd == "CLS";
-            self.execute_current_line();
-        }
-    }
-
-    fn execute_current_line(&mut self) {
-        // ENTER 押下時の改行を VRAM へ書き込む
-        self.machine.screen_putc(b'\n');
-        let p = self.machine.screen_gets();
-        // VRAM から行の長さを測り、生バイト列のスライスを取得する。String 経由
-        // (`c as char` → `as_bytes()`) は 0x80-0xFF のグラフィック文字を UTF-8
-        // で 2 バイトに展開してしまうため使えない。
-        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
-        let len = self.machine.ram[p..vram_end]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(vram_end - p);
-        if len == 0 {
-            return;
-        }
-        self.machine.is_esc_pressed = false;
-        // Machine 借用のため一旦スライスをローカルにコピー
-        let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
-        match exec_line_bytes(&mut self.machine, &line) {
-            Ok(LineOutcome::Executed) => {
-                if self.machine.pc != PC_NULL {
-                    // RUN 後など継続実行が必要。即時実行の完了もここを通る
-                    // (pc は PC_NULL に戻らず LINEBUF の終端を指したまま返る
-                    // ため)。実際の完了検知・"OK" 表示は update() の
-                    // is_running 処理ループ側で行う。
-                    self.is_running = true;
-                } else if !std::mem::take(&mut self.suppress_next_ok) {
-                    self.machine.put_str("OK\n");
-                }
-            }
-            Ok(LineOutcome::Edited) => {
-                // 行編集 (LIST 追加・削除) は OK を表示しない (IchigoJam 慣習)
-            }
-            Ok(LineOutcome::AwaitingInput) => {
-                // 即時モードの INPUT。対話入力モードへ移行する。
-                self.begin_input();
-            }
-            Err(_err) => {
-                // エラーメッセージは BASIC インタプリタ内で VRAM に
-                // 書き済 (command_error → basic_print_error)。
-            }
-        }
-    }
-
-    /// INPUT 文が入力待ちに入った時の準備。プロンプトは既に表示済みなので、
-    /// 現在のカーソル位置 (プロンプト直後) を入力値の開始位置として記録する。
-    fn begin_input(&mut self) {
-        self.input_origin = Some((self.machine.cursorx, self.machine.cursory));
-        self.machine.is_esc_pressed = false;
-    }
-
-    /// INPUT の入力確定。プロンプト直後から現在のカーソル行末までの VRAM を
-    /// 値テキストとして読み取り、`input_complete` で変数へ反映して実行を再開する。
-    fn complete_input(&mut self) {
-        let (ox, oy) = self.input_origin.take().unwrap_or((0, 0));
-        let w = self.machine.screen_cols();
-        let start = OFFSET_RAM_VRAM + ox as usize + oy as usize * w;
-        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
-        let len = self.machine.ram[start..vram_end]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(vram_end - start);
-        let line: Vec<u8> = self.machine.ram[start..start + len].to_vec();
-        self.machine.input_complete(&line);
-        // pc は INPUT 文の直後を指すので、実行を再開する。
-        self.is_running = true;
-    }
-
-    /// INPUT 入力中の ESC 中断。代入せずに入力待ちを解除し REPL へ戻る。
-    fn cancel_input(&mut self) {
-        self.input_origin = None;
-        self.machine.cancel_input();
-        self.machine.put_str("OK\n");
-        self.machine.is_esc_pressed = false;
     }
 }
 
@@ -556,19 +350,14 @@ impl Renderer {
     }
 }
 
-fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
+fn process_keyboard(ctx: &egui::Context, session: &mut Session) {
     ctx.input(|i| {
         // F10: ローマ字 → 半角カナ変換のオン/オフ
         // (本家 IchigoJam の Ctrl+Space は macOS では OS の入力ソース
         // 切替に予約されているため、両 OS で動く F10 を採用)
         if i.key_pressed(Key::F10) {
-            m.toggle_kana();
+            session.machine.toggle_kana();
         }
-        // 実機は keybuf を REPL 行編集と INKEY() で共有するが、本移植は
-        // 行編集を input_putc/input_control が直接担うため keybuf は INKEY()
-        // 専用。RUN 中以外は keybuf に積まない (REPL 編集中の文字を
-        // INKEY() が拾ってしまうのを避けるため)。
-        let executing = m.is_executing();
 
         for ev in &i.events {
             if let egui::Event::Key {
@@ -579,13 +368,11 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 ..
             } = ev
             {
-                // ホスト側で別処理: Enter (REPL 行確定 / 実行中は keybuf)、
-                // ESC (is_esc_pressed 立て)、F1-F12 (F キー割当)。
+                // ホスト側で別処理: Enter (状態に応じて Session が振り分け)、
+                // ESC (update 側の on_escape)、F1-F12 (F キー割当)。
                 // keymap は通さない。
                 if matches!(*key, Key::Enter) {
-                    if executing {
-                        m.key_push(b'\n');
-                    }
+                    let _ = session.on_enter();
                     continue;
                 }
                 if is_host_reserved_key(*key) {
@@ -595,10 +382,12 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 // (KBD コマンドの US/JA 切替を効かせるため)。physical_key が
                 // 取れない環境では論理キーをフォールバックに使う。
                 let phys = physical_key.unwrap_or(*key);
-                let Some(hid) = egui_key_to_hid(phys, m.keyboard_id()) else {
+                let Some(hid) = egui_key_to_hid(phys, session.machine.keyboard_id()) else {
                     continue;
                 };
-                let mut c = m.keymap_lookup(hid, modifiers.shift, modifiers.alt);
+                let mut c = session
+                    .machine
+                    .keymap_lookup(hid, modifiers.shift, modifiers.alt);
                 if c == 0 {
                     continue;
                 }
@@ -607,35 +396,20 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 if c.is_ascii_lowercase() {
                     c -= b'a' - b'A';
                 }
-                if executing {
-                    m.key_push(c);
-                    continue;
-                }
-                if is_edit_control_code(c) {
-                    // カナモード中の Backspace は未確定バッファ管理のため
-                    // input_putc を通す。それ以外の編集キーは input_control。
-                    if c == kc::BACKSPACE && m.is_kana_mode {
-                        m.input_putc(c);
-                    } else {
-                        m.input_control(c);
-                    }
-                } else if c >= 128 {
-                    // グラフィック文字 (128-255) はローマ字 → カナ変換を通さない
-                    m.screen_putc(c);
-                } else {
-                    m.input_putc(c);
-                }
+                // 実行中は keybuf (INKEY/INPUT) へ、停止中は REPL 行編集へ。
+                // 振り分けは Session が担う。
+                let _ = session.feed_char(c);
             }
         }
         // ウィンドウがフォーカスを失っている間は解放イベントを取りこぼし、
         // BTN() のキーが押しっぱなしになるため、押下状態を一括クリアする。
         if !i.focused {
-            m.key_clear_down();
+            session.machine.key_clear_down();
         }
         for ev in &i.events {
             if let egui::Event::Key { key, pressed, .. } = ev {
                 if let Some(code) = key_to_btn_code(*key) {
-                    m.key_set_down(code, *pressed);
+                    session.machine.key_set_down(code, *pressed);
                 }
             }
         }
@@ -661,27 +435,6 @@ fn is_host_reserved_key(k: Key) -> bool {
             | Key::F10
             | Key::F11
             | Key::F12
-    )
-}
-
-/// keymap の戻り値のうち、REPL 編集を進める「制御コード」群。
-/// これらは `input_control` 経由で画面エディタへ流す。
-fn is_edit_control_code(c: u8) -> bool {
-    matches!(
-        c,
-        kc::BACKSPACE
-            | kc::DELETE
-            | kc::CURSOR_LEFT
-            | kc::CURSOR_RIGHT
-            | kc::CURSOR_UP
-            | kc::CURSOR_DOWN
-            | kc::TAB
-            | kc::HOME
-            | kc::END
-            | kc::PAGE_UP
-            | kc::PAGE_DOWN
-            | kc::INSERT_TOGGLE
-            | kc::LINE_SPLIT
     )
 }
 
