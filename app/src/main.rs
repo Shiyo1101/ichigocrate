@@ -177,6 +177,10 @@ struct IchigoApp {
     /// INPUT 文の対話入力待ち中なら、入力値の開始 VRAM 座標 (プロンプト直後の
     /// cursorx, cursory)。Enter 確定時にこの位置から値テキストを読み取る。
     input_origin: Option<(i32, i32)>,
+    /// 次回の `execute_current_line` で "OK" 表示を抑止するフラグ。F1 (CLS)
+    /// ショートカットは画面を消すのが目的なので、直後に "OK" が出ると空白画面
+    /// にならず UX を損なう。
+    suppress_next_ok: bool,
 }
 
 impl IchigoApp {
@@ -201,6 +205,7 @@ impl IchigoApp {
             wait_until: None,
             was_kana_mode: false,
             input_origin: None,
+            suppress_next_ok: false,
         }
     }
 }
@@ -386,6 +391,8 @@ impl IchigoApp {
             self.machine.screen_putc(b);
         }
         if run {
+            // CLS 直後は画面を空白のまま保ちたいので "OK" 表示を抑止する。
+            self.suppress_next_ok = cmd == "CLS";
             self.execute_current_line();
         }
     }
@@ -408,12 +415,14 @@ impl IchigoApp {
         self.machine.is_esc_pressed = false;
         // Machine 借用のため一旦スライスをローカルにコピー
         let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
+        // どの分岐に転んでも取り消しておく (取り忘れによる誤抑止を防ぐ)
+        let suppress_ok = std::mem::take(&mut self.suppress_next_ok);
         match exec_line_bytes(&mut self.machine, &line) {
             Ok(LineOutcome::Executed) => {
                 if self.machine.pc != PC_NULL {
                     // RUN 後など継続実行が必要
                     self.is_running = true;
-                } else {
+                } else if !suppress_ok {
                     self.machine.put_str("OK\n");
                 }
             }

@@ -47,6 +47,10 @@ pub struct IchigoCrateRunner {
     /// onPrint で出力済みの位置 (出力カーソル列・行)。ここから現在のカーソルまでが新規。
     out_x: usize,
     out_y: usize,
+    /// 次回の `execute_current_line` で "OK" 表示を抑止するフラグ。F1 (CLS)
+    /// ショートカットは画面を消すのが目的なので、直後に "OK" が出ると空白画面
+    /// にならず UX を損なう。
+    suppress_next_ok: bool,
 }
 
 #[wasm_bindgen]
@@ -100,6 +104,7 @@ impl IchigoCrateRunner {
             prev_vram,
             out_x,
             out_y,
+            suppress_next_ok: false,
         })
     }
 
@@ -457,13 +462,15 @@ impl IchigoCrateRunner {
     /// なので、即時文はここで 1 フレーム分まで同期実行して完了させる。終わらなければ
     /// (RUN の無限ループ等) is_running を立ててフレーム側へ委譲し、ブラウザを固めない。
     fn finish_executed(&mut self) {
+        // どの分岐に転んでも取り消しておく (取り忘れによる誤抑止を防ぐ)
+        let suppress_ok = std::mem::take(&mut self.suppress_next_ok);
         if self.machine.pc != PC_NULL {
             self.is_running = true;
             self.machine.is_program_running = true;
             if self.wait_until_ms.is_none() {
                 self.step_chunk();
             }
-        } else {
+        } else if !suppress_ok {
             self.machine.put_str("OK\n");
         }
     }
@@ -566,6 +573,8 @@ impl IchigoCrateRunner {
             self.machine.screen_putc(b);
         }
         if run {
+            // CLS 直後は画面を空白のまま保ちたいので "OK" 表示を抑止する。
+            self.suppress_next_ok = cmd == "CLS";
             self.execute_current_line();
         }
     }
