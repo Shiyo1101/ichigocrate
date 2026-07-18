@@ -671,16 +671,9 @@ fn is_edit_control_code(c: u8) -> bool {
 /// `[` キー = 0x2f)。physical_key を引いて KBD コマンドの US/JA 切替を
 /// OS レイアウトに依らず効かせるための入り口。
 ///
-/// `'`/`Enter` の間にある「もう1本の」記号キーだけは US/JA で物理的に
-/// 異なる Usage ID を持つ (US 101 キー配列の `\` = 0x31、JIS 106 キー配列の
-/// `]` = 0x32)。winit/egui はこの2つを区別できず物理位置としては同じ
-/// `Key::Backslash` を報告する (winit の `KeyCode::Backslash` の doc 参照:
-/// "Used for both the US \ ... and also for the key located between the "
-/// and Enter keys on ... 106-key layouts")。したがってこのキーだけは
-/// `keyboard_id` (`KBD` コマンドで切り替わる US/JA 設定) を見て Usage ID
-/// 自体を出し分ける。JA 設定なのに固定で 0x31 を返すと、JIS 実機で `]` を
-/// 押しても JA 表の 0x31 (`\`) が引かれてしまう (JIS フォントでは `\` が
-/// `¥` として描画されるため一見 `¥` に化けたように見えるバグになる)。
+/// `Key::Backslash` だけ keyboard_id で Usage ID を出し分ける: winit は
+/// US の `\` (0x31) と JIS の `]` (0x32) を同じ物理キーとして区別しない
+/// ため (winit::KeyCode::Backslash の doc 参照)。
 fn egui_key_to_hid(k: Key, keyboard_id: u8) -> Option<u8> {
     Some(match k {
         // 英字: A=0x04 … Z=0x1d

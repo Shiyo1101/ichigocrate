@@ -45,13 +45,9 @@ pub(crate) fn fkey_binding(code: &str) -> Option<(&'static str, bool)> {
 /// 添字は HID Usage ID に一致させ (例: Digit2=0x1f、BracketLeft=0x2f)、
 /// 物理キー位置で keymap を引いて KBD の US/JA 切替を OS 非依存にする入り口。
 ///
-/// `'`/`Enter` の間にある「もう1本の」記号キーだけは US/JA で物理的に異なる
-/// Usage ID を持つ (US 101 キー配列の `\` = 0x31、JIS 106 キー配列の `]` =
-/// 0x32)。ブラウザの `KeyboardEvent.code` (W3C UI Events Code) はこの2つを
-/// 区別できず、同じ `"Backslash"` を報告する (仕様上も "Located between the
-/// ' and Enter keys ... Labelled ] } on a JIS keyboard" と定義されている)。
-/// したがってこのキーだけは `keyboard_id` (`KBD` コマンドで切り替わる
-/// US/JA 設定) を見て Usage ID 自体を出し分ける。
+/// `"Backslash"` だけ keyboard_id で Usage ID を出し分ける: W3C UI Events
+/// Code の仕様上、US の `\` (0x31) と JIS の `]` (0x32) は同じ `"Backslash"`
+/// として報告され区別できないため。
 pub(crate) fn code_to_hid(code: &str, keyboard_id: u8) -> Option<u8> {
     Some(match code {
         "KeyA" => 0x04,
