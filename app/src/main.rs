@@ -576,7 +576,7 @@ fn process_keyboard(ctx: &egui::Context, m: &mut Machine) {
                 // (KBD コマンドの US/JA 切替を効かせるため)。physical_key が
                 // 取れない環境では論理キーをフォールバックに使う。
                 let phys = physical_key.unwrap_or(*key);
-                let Some(hid) = egui_key_to_hid(phys) else {
+                let Some(hid) = egui_key_to_hid(phys, m.keyboard_id()) else {
                     continue;
                 };
                 let mut c = m.keymap_lookup(hid, modifiers.shift, modifiers.alt);
@@ -670,7 +670,11 @@ fn is_edit_control_code(c: u8) -> bool {
 /// 添字は HID Keyboard Usage ID に一致させる (例: 数字 2 キー = 0x1f、
 /// `[` キー = 0x2f)。physical_key を引いて KBD コマンドの US/JA 切替を
 /// OS レイアウトに依らず効かせるための入り口。
-fn egui_key_to_hid(k: Key) -> Option<u8> {
+///
+/// `Key::Backslash` だけ keyboard_id で Usage ID を出し分ける: winit は
+/// US の `\` (0x31) と JIS の `]` (0x32) を同じ物理キーとして区別しない
+/// ため (winit::KeyCode::Backslash の doc 参照)。
+fn egui_key_to_hid(k: Key, keyboard_id: u8) -> Option<u8> {
     Some(match k {
         // 英字: A=0x04 … Z=0x1d
         Key::A => 0x04,
@@ -719,7 +723,13 @@ fn egui_key_to_hid(k: Key) -> Option<u8> {
         Key::Equals | Key::Plus => 0x2e,
         Key::OpenBracket => 0x2f,
         Key::CloseBracket => 0x30,
-        Key::Backslash | Key::Pipe => 0x31,
+        Key::Backslash | Key::Pipe => {
+            if keyboard_id == 0 {
+                0x31
+            } else {
+                0x32
+            }
+        }
         Key::Semicolon | Key::Colon => 0x33,
         Key::Quote => 0x34,
         Key::Backtick => 0x35,
@@ -821,19 +831,30 @@ mod tests {
 
     #[test]
     fn egui_key_to_hid_covers_letters_and_digits() {
-        assert_eq!(egui_key_to_hid(Key::A), Some(0x04));
-        assert_eq!(egui_key_to_hid(Key::Z), Some(0x1d));
-        assert_eq!(egui_key_to_hid(Key::Num1), Some(0x1e));
-        assert_eq!(egui_key_to_hid(Key::Num0), Some(0x27));
+        assert_eq!(egui_key_to_hid(Key::A, 1), Some(0x04));
+        assert_eq!(egui_key_to_hid(Key::Z, 1), Some(0x1d));
+        assert_eq!(egui_key_to_hid(Key::Num1, 1), Some(0x1e));
+        assert_eq!(egui_key_to_hid(Key::Num0, 1), Some(0x27));
     }
 
     #[test]
     fn egui_key_to_hid_covers_symbols() {
         // 物理キー位置で引けないと KBD 切替が効かないので必ず網羅する。
-        assert_eq!(egui_key_to_hid(Key::Num2), Some(0x1f));
-        assert_eq!(egui_key_to_hid(Key::OpenBracket), Some(0x2f));
-        assert_eq!(egui_key_to_hid(Key::Quote), Some(0x34));
-        assert_eq!(egui_key_to_hid(Key::Semicolon), Some(0x33));
+        assert_eq!(egui_key_to_hid(Key::Num2, 1), Some(0x1f));
+        assert_eq!(egui_key_to_hid(Key::OpenBracket, 1), Some(0x2f));
+        assert_eq!(egui_key_to_hid(Key::Quote, 1), Some(0x34));
+        assert_eq!(egui_key_to_hid(Key::Semicolon, 1), Some(0x33));
+    }
+
+    #[test]
+    fn egui_key_to_hid_backslash_depends_on_keyboard_id() {
+        // US 101 キー配列の `\` = 0x31、JIS 106 キー配列の `]` = 0x32。
+        // winit/egui は物理位置として両者を区別せず同じ Key::Backslash を
+        // 報告するため、KBD で選んだ keyboard_id 側で Usage ID を出し分ける。
+        assert_eq!(egui_key_to_hid(Key::Backslash, 0), Some(0x31));
+        assert_eq!(egui_key_to_hid(Key::Backslash, 1), Some(0x32));
+        assert_eq!(egui_key_to_hid(Key::Pipe, 0), Some(0x31));
+        assert_eq!(egui_key_to_hid(Key::Pipe, 1), Some(0x32));
     }
 
     #[test]
