@@ -170,8 +170,7 @@ mod tests {
     fn code_to_hid_backslash_depends_on_keyboard_id() {
         // US 101 キー配列の `\` = 0x31、JIS 106 キー配列の `]` = 0x32。
         // ブラウザの KeyboardEvent.code は両者を区別せず同じ "Backslash" を
-        // 報告するため、KBD で選んだ keyboard_id 側で出し分ける必要がある
-        // (JIS 実機で `]` キーが `\`/`¥` に化ける不具合の修正)。
+        // 報告するため、KBD で選んだ keyboard_id 側で出し分ける。
         assert_eq!(code_to_hid("Backslash", 0), Some(0x31));
         assert_eq!(code_to_hid("Backslash", 1), Some(0x32));
     }

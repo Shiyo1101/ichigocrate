@@ -850,8 +850,7 @@ mod tests {
     fn egui_key_to_hid_backslash_depends_on_keyboard_id() {
         // US 101 キー配列の `\` = 0x31、JIS 106 キー配列の `]` = 0x32。
         // winit/egui は物理位置として両者を区別せず同じ Key::Backslash を
-        // 報告するため、KBD で選んだ keyboard_id 側で Usage ID を出し分ける
-        // 必要がある (JIS 実機で `]` キーが `¥`/`\` に化ける不具合の修正)。
+        // 報告するため、KBD で選んだ keyboard_id 側で Usage ID を出し分ける。
         assert_eq!(egui_key_to_hid(Key::Backslash, 0), Some(0x31));
         assert_eq!(egui_key_to_hid(Key::Backslash, 1), Some(0x32));
         assert_eq!(egui_key_to_hid(Key::Pipe, 0), Some(0x31));
