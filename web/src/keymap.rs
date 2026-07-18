@@ -44,7 +44,15 @@ pub(crate) fn fkey_binding(code: &str) -> Option<(&'static str, bool)> {
 /// `KeyboardEvent.code` を USB HID Keyboard Usage ID へ変換する。
 /// 添字は HID Usage ID に一致させ (例: Digit2=0x1f、BracketLeft=0x2f)、
 /// 物理キー位置で keymap を引いて KBD の US/JA 切替を OS 非依存にする入り口。
-pub(crate) fn code_to_hid(code: &str) -> Option<u8> {
+///
+/// `'`/`Enter` の間にある「もう1本の」記号キーだけは US/JA で物理的に異なる
+/// Usage ID を持つ (US 101 キー配列の `\` = 0x31、JIS 106 キー配列の `]` =
+/// 0x32)。ブラウザの `KeyboardEvent.code` (W3C UI Events Code) はこの2つを
+/// 区別できず、同じ `"Backslash"` を報告する (仕様上も "Located between the
+/// ' and Enter keys ... Labelled ] } on a JIS keyboard" と定義されている)。
+/// したがってこのキーだけは `keyboard_id` (`KBD` コマンドで切り替わる
+/// US/JA 設定) を見て Usage ID 自体を出し分ける。
+pub(crate) fn code_to_hid(code: &str, keyboard_id: u8) -> Option<u8> {
     Some(match code {
         "KeyA" => 0x04,
         "KeyB" => 0x05,
@@ -91,7 +99,13 @@ pub(crate) fn code_to_hid(code: &str) -> Option<u8> {
         "Equal" => 0x2e,
         "BracketLeft" => 0x2f,
         "BracketRight" => 0x30,
-        "Backslash" => 0x31,
+        "Backslash" => {
+            if keyboard_id == 0 {
+                0x31
+            } else {
+                0x32
+            }
+        }
         "Semicolon" => 0x33,
         "Quote" => 0x34,
         "Backquote" => 0x35,
@@ -147,13 +161,23 @@ mod tests {
 
     #[test]
     fn code_to_hid_matches_physical_positions() {
-        assert_eq!(code_to_hid("KeyA"), Some(0x04));
-        assert_eq!(code_to_hid("KeyZ"), Some(0x1d));
-        assert_eq!(code_to_hid("Digit2"), Some(0x1f));
-        assert_eq!(code_to_hid("Digit0"), Some(0x27));
-        assert_eq!(code_to_hid("BracketLeft"), Some(0x2f));
-        assert_eq!(code_to_hid("ArrowLeft"), Some(0x50));
-        assert_eq!(code_to_hid("Enter"), None);
+        assert_eq!(code_to_hid("KeyA", 1), Some(0x04));
+        assert_eq!(code_to_hid("KeyZ", 1), Some(0x1d));
+        assert_eq!(code_to_hid("Digit2", 1), Some(0x1f));
+        assert_eq!(code_to_hid("Digit0", 1), Some(0x27));
+        assert_eq!(code_to_hid("BracketLeft", 1), Some(0x2f));
+        assert_eq!(code_to_hid("ArrowLeft", 1), Some(0x50));
+        assert_eq!(code_to_hid("Enter", 1), None);
+    }
+
+    #[test]
+    fn code_to_hid_backslash_depends_on_keyboard_id() {
+        // US 101 キー配列の `\` = 0x31、JIS 106 キー配列の `]` = 0x32。
+        // ブラウザの KeyboardEvent.code は両者を区別せず同じ "Backslash" を
+        // 報告するため、KBD で選んだ keyboard_id 側で出し分ける必要がある
+        // (JIS 実機で `]` キーが `\`/`¥` に化ける不具合の修正)。
+        assert_eq!(code_to_hid("Backslash", 0), Some(0x31));
+        assert_eq!(code_to_hid("Backslash", 1), Some(0x32));
     }
 
     #[test]

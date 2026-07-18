@@ -203,7 +203,7 @@ impl IchigoCrateRunner {
             }
         }
 
-        let Some(hid) = code_to_hid(code) else {
+        let Some(hid) = code_to_hid(code, self.machine.keyboard_id()) else {
             return;
         };
         let mut c = self.machine.keymap_lookup(hid, shift, alt);
