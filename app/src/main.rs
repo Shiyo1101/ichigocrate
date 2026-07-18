@@ -673,7 +673,10 @@ fn is_edit_control_code(c: u8) -> bool {
 ///
 /// `Key::Backslash` だけ keyboard_id で Usage ID を出し分ける: winit は
 /// US の `\` (0x31) と JIS の `]` (0x32) を同じ物理キーとして区別しない
-/// ため (winit::KeyCode::Backslash の doc 参照)。
+/// ため (winit::KeyCode::Backslash の doc 参照)。`Key::Pipe` は含めない:
+/// egui-winit は `KeyCode::IntlYen` (¥/| キー) を physical_key に変換
+/// できず論理キーへフォールバックするため、layout に関わらず 0x31 固定
+/// (0x31 の shift 列は US/JA 共通で `|`)。
 fn egui_key_to_hid(k: Key, keyboard_id: u8) -> Option<u8> {
     Some(match k {
         // 英字: A=0x04 … Z=0x1d
@@ -723,13 +726,14 @@ fn egui_key_to_hid(k: Key, keyboard_id: u8) -> Option<u8> {
         Key::Equals | Key::Plus => 0x2e,
         Key::OpenBracket => 0x2f,
         Key::CloseBracket => 0x30,
-        Key::Backslash | Key::Pipe => {
+        Key::Backslash => {
             if keyboard_id == 0 {
                 0x31
             } else {
                 0x32
             }
         }
+        Key::Pipe => 0x31,
         Key::Semicolon | Key::Colon => 0x33,
         Key::Quote => 0x34,
         Key::Backtick => 0x35,
@@ -853,8 +857,33 @@ mod tests {
         // 報告するため、KBD で選んだ keyboard_id 側で Usage ID を出し分ける。
         assert_eq!(egui_key_to_hid(Key::Backslash, 0), Some(0x31));
         assert_eq!(egui_key_to_hid(Key::Backslash, 1), Some(0x32));
+    }
+
+    #[test]
+    fn egui_key_to_hid_pipe_is_layout_independent() {
+        // Key::Pipe は ¥/| キー (IntlYen) の論理キーフォールバックでのみ
+        // 現れ、layout に関わらず 0x31 固定 (shift 列は US/JA 共通で `|`)。
+        // Key::Backslash と同じ扱いにすると JIS 実機で Shift+¥/| が `}`
+        // になってしまう (回帰)。
         assert_eq!(egui_key_to_hid(Key::Pipe, 0), Some(0x31));
-        assert_eq!(egui_key_to_hid(Key::Pipe, 1), Some(0x32));
+        assert_eq!(egui_key_to_hid(Key::Pipe, 1), Some(0x31));
+    }
+
+    #[test]
+    fn backslash_and_pipe_end_to_end_output_chars() {
+        // egui_key_to_hid + keymap::lookup を通した最終出力文字まで確認する。
+        // Backslash キー (JIS `]` キー) は layout で出力が変わるが、
+        // Pipe キー (¥/| キー) は変わらないことを一度に検証する。
+        let lookup = |key: Key, keyboard_id: u8, shift: bool| {
+            let hid = egui_key_to_hid(key, keyboard_id).unwrap();
+            ichigocrate_core::keymap::lookup(keyboard_id, hid, shift, false)
+        };
+        assert_eq!(lookup(Key::Backslash, 0, false), b'\\'); // US: \
+        assert_eq!(lookup(Key::Backslash, 0, true), b'|'); // US+Shift: |
+        assert_eq!(lookup(Key::Backslash, 1, false), b']'); // JA: ]
+        assert_eq!(lookup(Key::Backslash, 1, true), b'}'); // JA+Shift: }
+        assert_eq!(lookup(Key::Pipe, 0, true), b'|'); // US+Shift: |
+        assert_eq!(lookup(Key::Pipe, 1, true), b'|'); // JA+Shift でも変わらず |
     }
 
     #[test]
