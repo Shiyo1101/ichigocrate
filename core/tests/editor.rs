@@ -55,24 +55,24 @@ fn clear_line_handles_wrapped_line() {
 fn video_modes() {
     let mut m = Machine::new();
     // 既定は通常表示 (オン・等倍・非反転)
-    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_big == 0);
+    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_zoom_shift == 0);
 
     // VIDEO 2: 反転、等倍
     let _ = exec_line(&mut m, "VIDEO 2");
-    assert!(m.is_video_enabled && m.is_screen_inverted && m.screen_big == 0);
+    assert!(m.is_video_enabled && m.is_screen_inverted && m.screen_zoom_shift == 0);
 
     // VIDEO 3: 拡大 (2 倍)、非反転。論理画面は 16x12 に縮む
     let _ = exec_line(&mut m, "VIDEO 3");
-    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_big == 1);
+    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_zoom_shift == 1);
     assert_eq!((m.screen_cols(), m.screen_rows()), (16, 12));
 
     // VIDEO 4: 拡大反転
     let _ = exec_line(&mut m, "VIDEO 4");
-    assert!(m.is_video_enabled && m.is_screen_inverted && m.screen_big == 1);
+    assert!(m.is_video_enabled && m.is_screen_inverted && m.screen_zoom_shift == 1);
 
     // VIDEO 1: 通常に戻る (32x24)
     let _ = exec_line(&mut m, "VIDEO 1");
-    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_big == 0);
+    assert!(m.is_video_enabled && !m.is_screen_inverted && m.screen_zoom_shift == 0);
     assert_eq!((m.screen_cols(), m.screen_rows()), (32, 24));
 
     // VIDEO 0: 表示オフ (倍率・反転は据え置き)

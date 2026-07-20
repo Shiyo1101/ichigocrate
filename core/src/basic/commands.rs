@@ -598,9 +598,9 @@ impl Machine {
             let video = video.max(0);
             self.is_screen_inverted = (video & 1) == 0; // VIDEO 2, 4 -> 反転
             let big = (((video - 1) >> 1).min(3)) as u8; // VIDEO 3, 4 -> 拡大
-            if big != self.screen_big {
+            if big != self.screen_zoom_shift {
                 // 拡大段階が変わると論理画面サイズも変わるため一旦クリアする。
-                self.screen_big = big;
+                self.screen_zoom_shift = big;
                 self.video_on();
                 self.screen_clear();
             } else {

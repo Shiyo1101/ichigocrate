@@ -34,11 +34,11 @@ impl Machine {
             }
         });
         self.psg_octave = PSG_DEFAULT_OCT;
-        self.psg_default_note_len = PSG_DEFAULT_LEN;
+        self.psg_default_note_32nds = PSG_DEFAULT_LEN;
         self.psg_tempo_bpm = PSG_DEFAULT_TEMPO;
-        self.psg_tone = 0;
+        self.is_tone_active = false;
         self.psg_remaining_frames = 0;
-        self.psg_repeat_pos = None;
+        self.psg_mml_repeat_pos = None;
         if self.psg_mml_pos.is_none() {
             self.current_tone_hz = 0.0;
         }
@@ -46,11 +46,9 @@ impl Machine {
 
     /// 指定トーン (TONE[] 配列上のインデックス) と長さ (frames) でビープ
     pub fn psg_beep(&mut self, tone: i16, len: i16) {
-        let ratio = self.psg_tick_ratio.max(1) as u32;
-        self.psg_remaining_frames =
-            (len as u32) * (PSG_TICK_FREQ / PSG_TICK_PER_SEC) * ratio;
+        self.psg_remaining_frames = (len as u32) * (PSG_TICK_FREQ / PSG_TICK_PER_SEC);
 
-        self.psg_tone = (tone as u32 * ratio) as u16;
+        self.is_tone_active = tone != 0;
         self.psg_mml_pos = None;
         // tone 値を Hz に変換 (簡易: 8000 / tone を擬似的に)
         self.current_tone_hz = if tone > 0 {
@@ -65,7 +63,7 @@ impl Machine {
     }
 
     pub fn psg_sound(&self) -> bool {
-        self.psg_tone != 0 || self.psg_mml_pos.is_some()
+        self.is_tone_active || self.psg_mml_pos.is_some()
     }
 
     /// 60Hz tick — MML を進める
@@ -76,7 +74,7 @@ impl Machine {
                 return;
             }
             if self.psg_mml_pos.is_none() {
-                self.psg_tone = 0;
+                self.is_tone_active = false;
                 self.current_tone_hz = 0.0;
             }
         }
@@ -111,11 +109,11 @@ impl Machine {
                 b'L' => {
                     let l = self.mml_parse_int();
                     if l > 0 {
-                        self.psg_default_note_len = (32 / l) as u8;
+                        self.psg_default_note_32nds = (32 / l) as u8;
                         let c3 = self.mml_peek();
                         if c3 == b'.' {
                             self.mml_advance();
-                            self.psg_default_note_len += self.psg_default_note_len >> 1;
+                            self.psg_default_note_32nds += self.psg_default_note_32nds >> 1;
                         }
                     }
                     continue;
@@ -141,18 +139,18 @@ impl Machine {
                 b'R' => t = -2,
                 b'$' => {
                     if self.mml_peek() != 0 {
-                        self.psg_repeat_pos = self.psg_mml_pos;
+                        self.psg_mml_repeat_pos = self.psg_mml_pos;
                     }
                     continue;
                 }
                 _ => {
-                    if self.psg_repeat_pos.is_some() && !flg {
-                        self.psg_mml_pos = self.psg_repeat_pos;
+                    if self.psg_mml_repeat_pos.is_some() && !flg {
+                        self.psg_mml_pos = self.psg_mml_repeat_pos;
                         flg = true;
                         continue;
                     }
                     self.psg_mml_pos = None;
-                    self.psg_tone = 0;
+                    self.is_tone_active = false;
                     self.psg_remaining_frames = 0;
                     self.current_tone_hz = 0.0;
                     return;
@@ -175,7 +173,7 @@ impl Machine {
             if len > 0 {
                 len = 32 / len;
             } else {
-                len = self.psg_default_note_len as u32;
+                len = self.psg_default_note_32nds as u32;
             }
             let c4 = self.mml_peek();
             if c4 == b'.' {
@@ -190,19 +188,18 @@ impl Machine {
             if s == 0 {
                 if t >= 0 {
                     self.current_tone_hz = t_to_hz(t);
-                    self.psg_tone = 1; // 鳴っているマーク (非ゼロ)
+                    self.is_tone_active = true;
                 } else if t == -2 {
                     self.current_tone_hz = 0.0;
-                    self.psg_tone = 0;
+                    self.is_tone_active = false;
                 }
             } else {
                 self.current_tone_hz = s as f32 * 8.0;
-                self.psg_tone = 1;
+                self.is_tone_active = true;
             }
 
-            let ratio = self.psg_tick_ratio.max(1) as u32;
             let tempo = self.psg_tempo_bpm.max(1) as u32;
-            self.psg_remaining_frames = len * ((60 * PSG_TICK_FREQ) >> 3) * ratio / tempo;
+            self.psg_remaining_frames = len * ((60 * PSG_TICK_FREQ) >> 3) / tempo;
             break;
         }
     }
