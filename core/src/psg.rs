@@ -49,6 +49,7 @@ impl Machine {
         let ratio = self.psg_tick_ratio.max(1) as u32;
         self.psg_remaining_frames =
             (len as u32) * (PSG_TICK_FREQ / PSG_TICK_PER_SEC) * ratio;
+
         self.psg_tone = (tone as u32 * ratio) as u16;
         self.psg_mml_pos = None;
         // tone 値を Hz に変換 (簡易: 8000 / tone を擬似的に)
