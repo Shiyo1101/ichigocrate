@@ -44,6 +44,8 @@ impl Machine {
         if self.ram_at(self.pc) == 0 {
             return Ok(()); // 行番号のみ → 削除のみで終了
         }
+
+        // 挿入位置より後ろを新しい行長ぶんだけ後方へずらして隙間を作る。
         let len_str = strlen8(&self.ram, self.pc);
         let align = (len_str & 1) as u16;
         let mut src = self.list_size as i32;
@@ -58,6 +60,8 @@ impl Machine {
             src -= 1;
             self.ram[OFFSET_RAM_LIST + dst as usize] = self.ram[OFFSET_RAM_LIST + src as usize];
         }
+
+        // 隙間へ行ヘッダ (行番号・長さ) と本文をコピーする。
         self.list_set_number(self.list_size, 0);
         self.list_set_number(found, number);
         self.list_set_length(found, len_str as u8);

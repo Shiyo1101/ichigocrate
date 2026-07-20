@@ -360,12 +360,14 @@ impl Machine {
             self.cursory = 0;
             self.cursorx = 0;
         }
+
         let w = self.text_cols;
         let p = (self.cursory as i64 - 1) * w as i64;
         if p < 0 {
             return OFFSET_RAM_VRAM;
         }
         let mut p = p as usize;
+
         // 上行末尾が直前行のテキスト末尾になるよう 1 行戻す
         // (空白セルの直前に文字が来ている場合のみ)
         let v = self.vram();
@@ -378,6 +380,7 @@ impl Machine {
             }
             p -= 1;
         }
+
         if v[p] != 0 {
             OFFSET_RAM_VRAM + p
         } else {
@@ -396,16 +399,19 @@ impl Machine {
         }
         let w = self.text_cols;
         let h = self.text_rows;
+
         // 直前行の末尾セルが埋まっている = 折り返し継続なので行頭まで遡る。
         let mut top = self.cursory as usize;
         while top > 0 && self.vram()[top * w - 1] != 0 {
             top -= 1;
         }
+
         // 自行の末尾セルが埋まっている間は折り返しが続くので下へ伸ばす。
         let mut bottom = top;
         while bottom + 1 < h && self.vram()[(bottom + 1) * w - 1] != 0 {
             bottom += 1;
         }
+
         self.vram_mut()[top * w..(bottom + 1) * w].fill(0);
         self.cursorx = 0;
         self.cursory = top as i32;

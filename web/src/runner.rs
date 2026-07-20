@@ -261,6 +261,7 @@ impl IchigoCrateRunner {
         let cols = self.session.machine.screen_cols();
         let rows = self.session.machine.screen_rows();
         let vram = self.session.machine.vram();
+
         let mut out = String::new();
         for y in 0..rows {
             let row = &vram[y * cols..(y + 1) * cols];

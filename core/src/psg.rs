@@ -47,6 +47,7 @@ impl Machine {
     /// 指定トーン (TONE[] 配列上のインデックス) と長さ (frames) でビープ
     pub fn psg_beep(&mut self, tone: i16, len: i16) {
         self.psg_remaining_frames = (len as u32) * (PSG_TICK_FREQ / PSG_TICK_PER_SEC);
+
         self.is_tone_active = tone != 0;
         self.psg_mml_pos = None;
         // tone 値を Hz に変換 (簡易: 8000 / tone を擬似的に)

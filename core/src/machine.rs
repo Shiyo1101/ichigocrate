@@ -490,6 +490,7 @@ impl Machine {
             len += 1;
             n = -n;
         }
+
         let mut v: u32 = 0;
         let mut d: u32 = 10000;
         while d > 0 {
