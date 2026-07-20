@@ -25,13 +25,13 @@ impl Machine {
             let len = self.list_get_length(found) as u16 + 4;
             let mut dst = found as usize;
             let mut src = found as usize + len as usize;
-            while src < self.listsize as usize {
+            while src < self.list_size as usize {
                 self.ram[OFFSET_RAM_LIST + dst] = self.ram[OFFSET_RAM_LIST + src];
                 dst += 1;
                 src += 1;
             }
-            self.listsize -= len;
-            self.list_set_number(self.listsize, 0);
+            self.list_size -= len;
+            self.list_set_number(self.list_size, 0);
         }
 
         // 末尾スペース除去 (1 個は残す)
@@ -46,19 +46,19 @@ impl Machine {
         }
         let len_str = strlen8(&self.ram, self.pc);
         let align = (len_str & 1) as u16;
-        let mut src = self.listsize as i32;
-        let dst_end = self.listsize + len_str as u16 + align + 4;
+        let mut src = self.list_size as i32;
+        let dst_end = self.list_size + len_str as u16 + align + 4;
         if dst_end as usize + 2 > IJB_SIZEOF_LIST {
             return Err(ERR_OUT_OF_MEMORY);
         }
-        self.listsize = dst_end;
+        self.list_size = dst_end;
         let mut dst = dst_end as i32;
         while src > found as i32 {
             dst -= 1;
             src -= 1;
             self.ram[OFFSET_RAM_LIST + dst as usize] = self.ram[OFFSET_RAM_LIST + src as usize];
         }
-        self.list_set_number(self.listsize, 0);
+        self.list_set_number(self.list_size, 0);
         self.list_set_number(found, number);
         self.list_set_length(found, len_str as u8);
         let mut dst = found as usize + 3;
@@ -163,11 +163,11 @@ impl Machine {
     }
 
     pub(super) fn command_for(&mut self) -> BResult<()> {
-        if self.nforstack as usize >= IJB_SIZEOF_FOR_STACK {
+        if self.for_depth as usize >= IJB_SIZEOF_FOR_STACK {
             return Err(ERR_STACK_OVERFLOW);
         }
-        self.forstack[self.nforstack as usize] = self.pc;
-        self.nforstack += 1;
+        self.for_stack[self.for_depth as usize] = self.pc;
+        self.for_depth += 1;
 
         let v = self.parse_lvalue_index()?;
         let t = self.token_get();
@@ -191,12 +191,12 @@ impl Machine {
     }
 
     pub(super) fn command_next(&mut self) -> BResult<()> {
-        if self.nforstack == 0 {
+        if self.for_depth == 0 {
             return Err(ERR_NOT_MATCH);
         }
         self.expect_statement_end()?;
         let bkpc = self.pc;
-        self.pc = self.forstack[self.nforstack as usize - 1];
+        self.pc = self.for_stack[self.for_depth as usize - 1];
         let v = self.parse_lvalue_index()?;
         let t = self.token_get();
         if t.code != TOKEN_EQ && t.code != TOKEN_COMMA {
@@ -217,18 +217,18 @@ impl Machine {
         let cur = self.var_get(v);
         if cur == to {
             self.pc = bkpc;
-            self.nforstack -= 1;
+            self.for_depth -= 1;
             return Ok(());
         }
         if ival <= to {
             if cur.wrapping_add(step) > to {
                 self.pc = bkpc;
-                self.nforstack -= 1;
+                self.for_depth -= 1;
                 return Ok(());
             }
         } else if cur.wrapping_add(step) < to {
             self.pc = bkpc;
-            self.nforstack -= 1;
+            self.for_depth -= 1;
             return Ok(());
         }
         self.var_set(v, cur.wrapping_add(step));
@@ -247,7 +247,7 @@ impl Machine {
     }
 
     pub(super) fn command_gosub(&mut self) -> BResult<()> {
-        if self.ngosubstack as usize >= IJB_SIZEOF_GOSUB_STACK {
+        if self.gosub_depth as usize >= IJB_SIZEOF_GOSUB_STACK {
             return Err(ERR_STACK_OVERFLOW);
         }
         let n = self.eval_expression()?;
@@ -256,19 +256,19 @@ impl Machine {
             return Err(ERR_UNDEFINED_LINE);
         }
         self.expect_statement_end()?;
-        self.gosubstack[self.ngosubstack as usize] = self.pc;
-        self.ngosubstack += 1;
+        self.gosub_stack[self.gosub_depth as usize] = self.pc;
+        self.gosub_depth += 1;
         self.list_set_pc(idx as u16);
         Ok(())
     }
 
     pub(super) fn command_return(&mut self) -> BResult<()> {
-        if self.ngosubstack == 0 {
+        if self.gosub_depth == 0 {
             return Err(ERR_NOT_MATCH);
         }
         self.expect_statement_end()?;
-        self.ngosubstack -= 1;
-        self.pc = self.gosubstack[self.ngosubstack as usize];
+        self.gosub_depth -= 1;
+        self.pc = self.gosub_stack[self.gosub_depth as usize];
         Ok(())
     }
 
@@ -308,10 +308,10 @@ impl Machine {
 
     pub(super) fn command_run(&mut self) -> BResult<()> {
         self.expect_statement_end()?;
-        self.ngosubstack = 0;
-        self.nforstack = 0;
+        self.gosub_depth = 0;
+        self.for_depth = 0;
         self.key_clear_key();
-        if self.listsize > 0 {
+        if self.list_size > 0 {
             self.list_set_pc(0);
         } else {
             self.pc = PC_NULL;
@@ -432,7 +432,7 @@ impl Machine {
     pub(super) fn command_new(&mut self) -> BResult<()> {
         self.expect_statement_end()?;
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
-        self.listsize = 0;
+        self.list_size = 0;
         self.pc = PC_NULL;
         self.break_resume_pc = PC_NULL;
         Ok(())
@@ -562,8 +562,8 @@ impl Machine {
             (x as i32, y as i32)
         } else {
             self.token_back();
-            let y = calc_div(x as i32, self.screenw as i32);
-            let x = calc_mod(x as i32, self.screenw as i32);
+            let y = calc_div(x as i32, self.text_cols as i32);
+            let x = calc_mod(x as i32, self.text_cols as i32);
             (x, y)
         };
         self.expect_statement_end()?;
@@ -724,11 +724,11 @@ impl Machine {
     // ---- SAVE / LOAD / LRUN / FILES (ホストストレージ経由) ----
 
     pub(super) fn command_save(&mut self) -> BResult<()> {
-        let n = self.parse_optional_expr(self.lastfile as i16)?;
+        let n = self.parse_optional_expr(self.last_file_slot as i16)?;
         self.expect_statement_end()?;
 
-        let listsize = self.listsize as usize;
-        let data: Vec<u8> = self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + listsize].to_vec();
+        let list_size = self.list_size as usize;
+        let data: Vec<u8> = self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + list_size].to_vec();
         let ok = if let Some(s) = self.storage.as_mut() {
             s.save(n as u8, &data)
         } else {
@@ -737,17 +737,17 @@ impl Machine {
         if !ok {
             return Err(ERR_FILE_ERROR);
         }
-        self.lastfile = n as u8;
+        self.last_file_slot = n as u8;
         if !self.is_quiet_mode {
             self.put_str("Saved ");
-            self.put_num(listsize as i32);
+            self.put_num(list_size as i32);
             self.put_str("byte\n");
         }
         Ok(())
     }
 
     pub(super) fn command_load(&mut self, lrun: bool) -> BResult<()> {
-        let n = self.parse_optional_expr(self.lastfile as i16)?;
+        let n = self.parse_optional_expr(self.last_file_slot as i16)?;
         let mut m: i16 = 0;
         if lrun {
             let code = self.token_get().code;
@@ -760,7 +760,7 @@ impl Machine {
         self.expect_statement_end()?;
 
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
-        self.listsize = 0;
+        self.list_size = 0;
         self.pc = PC_NULL;
         self.break_resume_pc = PC_NULL;
 
@@ -772,7 +772,7 @@ impl Machine {
         };
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + read].copy_from_slice(&buf[..read]);
 
-        // 行を辿って listsize を再算出 (壊れた SAVE データの検出を兼ねる)
+        // 行を辿って list_size を再算出 (壊れた SAVE データの検出を兼ねる)
         let mut index: u16 = 0;
         let mut bk_num = 0i16;
         loop {
@@ -790,8 +790,8 @@ impl Machine {
             }
             index = next as u16;
         }
-        self.listsize = index;
-        self.lastfile = n as u8;
+        self.list_size = index;
+        self.last_file_slot = n as u8;
 
         if !lrun && !self.is_quiet_mode {
             self.put_str("Loaded ");
@@ -800,9 +800,9 @@ impl Machine {
         }
 
         if lrun {
-            self.ngosubstack = 0;
-            self.nforstack = 0;
-            if self.listsize > 0 {
+            self.gosub_depth = 0;
+            self.for_depth = 0;
+            if self.list_size > 0 {
                 let start = if m > 0 {
                     let i = self.list_find_goto(m);
                     if i < 0 {

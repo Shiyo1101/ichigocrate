@@ -27,8 +27,8 @@ impl Machine {
     /// `commandline_pc` は RAM インデックス。
     pub fn basic_start(&mut self, commandline_pc: usize) {
         self.last_error = None;
-        self.ngosubstack = 0;
-        self.nforstack = 0;
+        self.gosub_depth = 0;
+        self.for_depth = 0;
         self.is_expr_mode = false;
         self.pc = commandline_pc;
         self.last_token_start_pc = 0;
@@ -136,7 +136,7 @@ impl Machine {
             self.pc += 1;
         }
         if self.pc >= OFFSET_RAM_LIST
-            && self.pc + 4 < OFFSET_RAM_LIST + self.listsize as usize
+            && self.pc + 4 < OFFSET_RAM_LIST + self.list_size as usize
         {
             self.pc += 4;
             return None;

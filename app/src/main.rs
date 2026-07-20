@@ -396,7 +396,7 @@ fn process_keyboard(ctx: &egui::Context, session: &mut Session) {
                 if c.is_ascii_lowercase() {
                     c -= b'a' - b'A';
                 }
-                // 実行中は keybuf (INKEY/INPUT) へ、停止中は REPL 行編集へ。
+                // 実行中は inkey_queue (INKEY/INPUT) へ、停止中は REPL 行編集へ。
                 // 振り分けは Session が担う。
                 let _ = session.feed_char(c);
             }

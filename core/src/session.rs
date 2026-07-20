@@ -174,7 +174,7 @@ impl Session {
         err
     }
 
-    /// Enter キー 1 押下ぶんの処理。実行中は keybuf (INKEY/INPUT) へ、INPUT
+    /// Enter キー 1 押下ぶんの処理。実行中は inkey_queue (INKEY/INPUT) へ、INPUT
     /// 待ち中は値確定、REPL 中は現在行の実行。即時実行がエラーで止まった
     /// ときはその理由を返す。
     pub fn on_enter(&mut self) -> Option<BasicError> {
@@ -199,7 +199,7 @@ impl Session {
         }
     }
 
-    /// 解決済みの 1 文字をモード適応で流す。実行中は keybuf (INKEY/INPUT) へ、
+    /// 解決済みの 1 文字をモード適応で流す。実行中は inkey_queue (INKEY/INPUT) へ、
     /// 停止中は REPL 行編集へ振り分ける。改行は [`Self::on_enter`] と同じ扱い。
     pub fn feed_char(&mut self, c: u8) -> Option<BasicError> {
         self.sync_before_input();

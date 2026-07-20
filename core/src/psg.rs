@@ -26,32 +26,32 @@ fn t_to_hz(t: i32) -> f32 {
 impl Machine {
     /// MML 文字列をセットして再生開始。`mml_addr` は仮想アドレス。
     pub fn psg_play_mml(&mut self, mml_addr: Option<i32>) {
-        self.psgmml = mml_addr.and_then(|a| {
+        self.psg_mml_pos = mml_addr.and_then(|a| {
             if a >= OFFSET_RAMROM as i32 {
                 Some((a - OFFSET_RAMROM as i32) as usize)
             } else {
                 None
             }
         });
-        self.psgoct = PSG_DEFAULT_OCT;
-        self.psgdeflen = PSG_DEFAULT_LEN;
-        self.psgtempo = PSG_DEFAULT_TEMPO;
-        self.psgtone = 0;
-        self.psglen = 0;
-        self.psgrep = None;
-        if self.psgmml.is_none() {
+        self.psg_octave = PSG_DEFAULT_OCT;
+        self.psg_default_note_len = PSG_DEFAULT_LEN;
+        self.psg_tempo_bpm = PSG_DEFAULT_TEMPO;
+        self.psg_tone = 0;
+        self.psg_remaining_frames = 0;
+        self.psg_repeat_pos = None;
+        if self.psg_mml_pos.is_none() {
             self.current_tone_hz = 0.0;
         }
     }
 
     /// 指定トーン (TONE[] 配列上のインデックス) と長さ (frames) でビープ
     pub fn psg_beep(&mut self, tone: i16, len: i16) {
-        let ratio = self.psgratio.max(1) as u32;
-        self.psglen =
+        let ratio = self.psg_tick_ratio.max(1) as u32;
+        self.psg_remaining_frames =
             (len as u32) * (PSG_TICK_FREQ / PSG_TICK_PER_SEC) * ratio;
-        self.psgtone = (tone as u32 * ratio) as u16;
-        self.psgwaitcnt = self.psgtone.saturating_sub(1);
-        self.psgmml = None;
+        self.psg_tone = (tone as u32 * ratio) as u16;
+        self.psgwaitcnt = self.psg_tone.saturating_sub(1);
+        self.psg_mml_pos = None;
         // tone 値を Hz に変換 (簡易: 8000 / tone を擬似的に)
         self.current_tone_hz = if tone > 0 {
             8000.0 / tone as f32
@@ -61,26 +61,26 @@ impl Machine {
     }
 
     pub fn psg_tempo(&mut self, tempo: i16) {
-        self.psgtempo = tempo as u16;
+        self.psg_tempo_bpm = tempo as u16;
     }
 
     pub fn psg_sound(&self) -> bool {
-        self.psgtone != 0 || self.psgmml.is_some()
+        self.psg_tone != 0 || self.psg_mml_pos.is_some()
     }
 
     /// 60Hz tick — MML を進める
     pub fn psg_tick(&mut self) {
-        if self.psglen > 0 {
-            self.psglen -= 1;
-            if self.psglen > 0 {
+        if self.psg_remaining_frames > 0 {
+            self.psg_remaining_frames -= 1;
+            if self.psg_remaining_frames > 0 {
                 return;
             }
-            if self.psgmml.is_none() {
-                self.psgtone = 0;
+            if self.psg_mml_pos.is_none() {
+                self.psg_tone = 0;
                 self.current_tone_hz = 0.0;
             }
         }
-        if self.psgmml.is_none() {
+        if self.psg_mml_pos.is_none() {
             return;
         }
 
@@ -91,11 +91,11 @@ impl Machine {
             let c = basic_toupper(self.mml_next());
             match c {
                 b'<' => {
-                    self.psgoct = self.psgoct.wrapping_add(1);
+                    self.psg_octave = self.psg_octave.wrapping_add(1);
                     continue;
                 }
                 b'>' => {
-                    self.psgoct = self.psgoct.wrapping_sub(1);
+                    self.psg_octave = self.psg_octave.wrapping_sub(1);
                     continue;
                 }
                 b'O' => {
@@ -104,25 +104,25 @@ impl Machine {
                         continue;
                     }
                     self.mml_advance();
-                    self.psgoct = (c2 as i32 - b'0' as i32) as u8;
+                    self.psg_octave = (c2 as i32 - b'0' as i32) as u8;
                     continue;
                 }
                 b' ' => continue,
                 b'L' => {
                     let l = self.mml_parse_int();
                     if l > 0 {
-                        self.psgdeflen = (32 / l) as u8;
+                        self.psg_default_note_len = (32 / l) as u8;
                         let c3 = self.mml_peek();
                         if c3 == b'.' {
                             self.mml_advance();
-                            self.psgdeflen += self.psgdeflen >> 1;
+                            self.psg_default_note_len += self.psg_default_note_len >> 1;
                         }
                     }
                     continue;
                 }
                 b'T' => {
                     let v = self.mml_parse_int();
-                    self.psgtempo = v as u16;
+                    self.psg_tempo_bpm = v as u16;
                     continue;
                 }
                 b'N' => {
@@ -141,19 +141,19 @@ impl Machine {
                 b'R' => t = -2,
                 b'$' => {
                     if self.mml_peek() != 0 {
-                        self.psgrep = self.psgmml;
+                        self.psg_repeat_pos = self.psg_mml_pos;
                     }
                     continue;
                 }
                 _ => {
-                    if self.psgrep.is_some() && !flg {
-                        self.psgmml = self.psgrep;
+                    if self.psg_repeat_pos.is_some() && !flg {
+                        self.psg_mml_pos = self.psg_repeat_pos;
                         flg = true;
                         continue;
                     }
-                    self.psgmml = None;
-                    self.psgtone = 0;
-                    self.psglen = 0;
+                    self.psg_mml_pos = None;
+                    self.psg_tone = 0;
+                    self.psg_remaining_frames = 0;
                     self.current_tone_hz = 0.0;
                     return;
                 }
@@ -175,7 +175,7 @@ impl Machine {
             if len > 0 {
                 len = 32 / len;
             } else {
-                len = self.psgdeflen as u32;
+                len = self.psg_default_note_len as u32;
             }
             let c4 = self.mml_peek();
             if c4 == b'.' {
@@ -183,42 +183,42 @@ impl Machine {
                 len += len >> 1;
             }
             if t > -2 {
-                t += (self.psgoct as i32 - 1) * 12;
+                t += (self.psg_octave as i32 - 1) * 12;
             }
 
             // 音高 → Hz (ratio や TONE テーブルは使わず音楽的に正しい周波数)
             if s == 0 {
                 if t >= 0 {
                     self.current_tone_hz = t_to_hz(t);
-                    self.psgtone = 1; // 鳴っているマーク (非ゼロ)
+                    self.psg_tone = 1; // 鳴っているマーク (非ゼロ)
                 } else if t == -2 {
                     self.current_tone_hz = 0.0;
-                    self.psgtone = 0;
+                    self.psg_tone = 0;
                 }
             } else {
                 self.current_tone_hz = s as f32 * 8.0;
-                self.psgtone = 1;
+                self.psg_tone = 1;
             }
 
-            let ratio = self.psgratio.max(1) as u32;
-            let tempo = self.psgtempo.max(1) as u32;
-            self.psglen = len * ((60 * PSG_TICK_FREQ) >> 3) * ratio / tempo;
+            let ratio = self.psg_tick_ratio.max(1) as u32;
+            let tempo = self.psg_tempo_bpm.max(1) as u32;
+            self.psg_remaining_frames = len * ((60 * PSG_TICK_FREQ) >> 3) * ratio / tempo;
             break;
         }
     }
 
     fn mml_peek(&self) -> u8 {
-        match self.psgmml {
+        match self.psg_mml_pos {
             Some(p) if p < self.ram.len() => self.ram[p],
             _ => 0,
         }
     }
 
     fn mml_next(&mut self) -> u8 {
-        match self.psgmml {
+        match self.psg_mml_pos {
             Some(p) if p < self.ram.len() => {
                 let c = self.ram[p];
-                self.psgmml = Some(p + 1);
+                self.psg_mml_pos = Some(p + 1);
                 c
             }
             _ => 0,
@@ -226,8 +226,8 @@ impl Machine {
     }
 
     fn mml_advance(&mut self) {
-        if let Some(p) = self.psgmml {
-            self.psgmml = Some(p + 1);
+        if let Some(p) = self.psg_mml_pos {
+            self.psg_mml_pos = Some(p + 1);
         }
     }
 

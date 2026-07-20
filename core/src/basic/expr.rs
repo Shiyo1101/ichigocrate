@@ -204,9 +204,9 @@ impl Machine {
                 Ok(match n {
                     1 => self.cursorx as i16,
                     2 => self.cursory as i16,
-                    3 => self.screenw as i16,
-                    4 => self.screenh as i16,
-                    _ => (self.cursorx + self.cursory * self.screenw as i32) as i16,
+                    3 => self.text_cols as i16,
+                    4 => self.text_rows as i16,
+                    _ => (self.cursorx + self.cursory * self.text_cols as i32) as i16,
                 })
             }
             TOKEN_SOUND => {
@@ -217,7 +217,7 @@ impl Machine {
                 self.eval_optional_arg()?;
                 Ok(0)
             }
-            TOKEN_FREE => Ok(((IJB_SIZEOF_LIST as u16) - 2 - self.listsize) as i16),
+            TOKEN_FREE => Ok(((IJB_SIZEOF_LIST as u16) - 2 - self.list_size) as i16),
             TOKEN_VER => {
                 let n = self.eval_optional_arg()?;
                 Ok(match n {
@@ -252,7 +252,7 @@ impl Machine {
                 let n = self.eval_optional_arg()?;
                 Ok(self.tick_count(n))
             }
-            TOKEN_FILE => Ok(self.lastfile as i16),
+            TOKEN_FILE => Ok(self.last_file_slot as i16),
             TOKEN_LINE => {
                 let pc2 = if self.pc_in_list() { self.pc } else { self.break_resume_pc };
                 if (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&pc2) {

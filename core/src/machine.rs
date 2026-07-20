@@ -55,7 +55,7 @@ pub struct Machine {
     /// プログラムカウンタ (ram のインデックス)。PC_NULL なら未走行。
     pub pc: usize,
     /// LIST の使用バイト数 (末尾 0x00 0x00 を除く)
-    pub listsize: u16,
+    pub list_size: u16,
 
     // ===== スクリーン状態 (ホストが描画時に読む) =====
     pub cursorx: i32,
@@ -97,15 +97,15 @@ pub struct Machine {
     /// 直近の停止理由。実行ループ ([`Machine::basic_step`]) が `Err` を捕捉して
     /// 格納し、境界 (`exec_line`) が読み取る。
     pub(crate) last_error: Option<BasicError>,
-    pub(crate) ngosubstack: u8,
-    pub(crate) nforstack: u8,
-    pub(crate) gosubstack: [usize; IJB_SIZEOF_GOSUB_STACK],
-    pub(crate) forstack: [usize; IJB_SIZEOF_FOR_STACK],
+    pub(crate) gosub_depth: u8,
+    pub(crate) for_depth: u8,
+    pub(crate) gosub_stack: [usize; IJB_SIZEOF_GOSUB_STACK],
+    pub(crate) for_stack: [usize; IJB_SIZEOF_FOR_STACK],
     /// トークン解釈が式の文脈にあるか (false=コマンド, true=式)。
     pub(crate) is_expr_mode: bool,
 
-    pub(crate) screenw: usize,
-    pub(crate) screenh: usize,
+    pub(crate) text_cols: usize,
+    pub(crate) text_rows: usize,
     /// 文字描画が上書きモードか (false=挿入, true=上書き)。
     pub(crate) is_overwrite_mode: bool,
     pub(crate) locate_pending_bytes: u8,
@@ -114,10 +114,10 @@ pub struct Machine {
     /// の同期元。
     pub(crate) is_overwrite_toggle: bool,
     /// ローマ字かな変換の未確定バッファ (子音 1〜2 文字目)
-    pub(crate) key_kana_buf_0: u8,
-    pub(crate) key_kana_buf_1: u8,
+    pub(crate) romaji_pending_0: u8,
+    pub(crate) romaji_pending_1: u8,
     /// INKEY() 用のキューイング入力バッファ
-    pub(crate) keybuf: VecDeque<u8>,
+    pub(crate) inkey_queue: VecDeque<u8>,
     /// キーボードレイアウト ID (`KBD` コマンド / `VER(2)` 用)。
     /// 0 = US, 1 = JA。デフォルトは JA。`KBD n` は `!!n` で正規化される。
     /// 実機はフラッシュへ永続化するが本移植はメモリ内のみ。
@@ -137,22 +137,22 @@ pub struct Machine {
     /// `target` は代入先の変数/配列要素のスロット番号。
     pub(crate) input_pending: Option<usize>,
 
-    pub(crate) psgoct: u8,
-    pub(crate) psgdeflen: u8,
-    pub(crate) psgratio: u8,
+    pub(crate) psg_octave: u8,
+    pub(crate) psg_default_note_len: u8,
+    pub(crate) psg_tick_ratio: u8,
     pub(crate) psgwaitcnt: u16,
-    pub(crate) psgtone: u16,
-    pub(crate) psgtempo: u16,
-    pub(crate) psglen: u32,
+    pub(crate) psg_tone: u16,
+    pub(crate) psg_tempo_bpm: u16,
+    pub(crate) psg_remaining_frames: u32,
     /// MML 文字列の RAM インデックス (None = 演奏終了)
-    pub(crate) psgmml: Option<usize>,
-    pub(crate) psgrep: Option<usize>,
+    pub(crate) psg_mml_pos: Option<usize>,
+    pub(crate) psg_repeat_pos: Option<usize>,
 
-    pub(crate) linecnt: u16,
-    pub(crate) rndn: [u32; 4],
+    pub(crate) video_line_count: u16,
+    pub(crate) rnd_state: [u32; 4],
 
     /// 最後に SAVE/LOAD した slot 番号 (FILE() で参照)
-    pub(crate) lastfile: u8,
+    pub(crate) last_file_slot: u8,
 
     /// ホスト側ストレージ (デスクトップではディスク)。None なら File error。
     pub(crate) storage: Option<Box<dyn Storage>>,
@@ -191,17 +191,17 @@ impl Machine {
             last_token: Token::default(),
             break_resume_pc: PC_NULL,
             last_error: None,
-            ngosubstack: 0,
-            nforstack: 0,
-            gosubstack: [0; IJB_SIZEOF_GOSUB_STACK],
-            forstack: [0; IJB_SIZEOF_FOR_STACK],
+            gosub_depth: 0,
+            for_depth: 0,
+            gosub_stack: [0; IJB_SIZEOF_GOSUB_STACK],
+            for_stack: [0; IJB_SIZEOF_FOR_STACK],
             is_expr_mode: false,
-            listsize: 0,
+            list_size: 0,
 
             cursorx: 0,
             cursory: 0,
-            screenw: SCREEN_W,
-            screenh: SCREEN_H,
+            text_cols: SCREEN_W,
+            text_rows: SCREEN_H,
             is_cursor_visible: true,
             is_overwrite_mode: true,
             locate_pending_bytes: 0,
@@ -211,32 +211,32 @@ impl Machine {
 
             is_overwrite_toggle: false,
             is_kana_mode: false,
-            key_kana_buf_0: 0,
-            key_kana_buf_1: 0,
+            romaji_pending_0: 0,
+            romaji_pending_1: 0,
             is_esc_pressed: false,
-            keybuf: VecDeque::with_capacity(128),
+            inkey_queue: VecDeque::with_capacity(128),
             keyboard_id: 1,
             keys_down: [false; 256],
             is_program_running: false,
             is_quiet_mode: false,
             input_pending: None,
 
-            psgoct: 3,
-            psgdeflen: 8,
-            psgratio: 1,
+            psg_octave: 3,
+            psg_default_note_len: 8,
+            psg_tick_ratio: 1,
             psgwaitcnt: 0,
-            psgtone: 0,
-            psgtempo: 120,
-            psglen: 0,
-            psgmml: None,
-            psgrep: None,
+            psg_tone: 0,
+            psg_tempo_bpm: 120,
+            psg_remaining_frames: 0,
+            psg_mml_pos: None,
+            psg_repeat_pos: None,
 
             frames: 0,
-            linecnt: 0,
-            rndn: [123456789, 362436069, 521288629, 88675123],
+            video_line_count: 0,
+            rnd_state: [123456789, 362436069, 521288629, 88675123],
 
             is_led_on: false,
-            lastfile: 0,
+            last_file_slot: 0,
 
             current_tone_hz: 0.0,
             wait_frames: 0,
@@ -254,12 +254,12 @@ impl Machine {
     // ---- 乱数 ----
 
     pub fn rnd_next(&mut self) -> u32 {
-        let t = self.rndn[0] ^ (self.rndn[0].wrapping_shl(11));
-        self.rndn[0] = self.rndn[1];
-        self.rndn[1] = self.rndn[2];
-        self.rndn[2] = self.rndn[3];
-        let v = (self.rndn[3] ^ (self.rndn[3] >> 19)) ^ (t ^ (t >> 8));
-        self.rndn[3] = v;
+        let t = self.rnd_state[0] ^ (self.rnd_state[0].wrapping_shl(11));
+        self.rnd_state[0] = self.rnd_state[1];
+        self.rnd_state[1] = self.rnd_state[2];
+        self.rnd_state[2] = self.rnd_state[3];
+        let v = (self.rnd_state[3] ^ (self.rnd_state[3] >> 19)) ^ (t ^ (t >> 8));
+        self.rnd_state[3] = v;
         v
     }
 
@@ -272,7 +272,7 @@ impl Machine {
     }
 
     pub fn random_seed(&mut self, n: i32) {
-        self.rndn = [n as u32, 362436069, 521288629, 88675123];
+        self.rnd_state = [n as u32, 362436069, 521288629, 88675123];
     }
 
     // ---- 変数アクセス (VAR 領域の薄いラッパ) ----
@@ -397,7 +397,7 @@ impl Machine {
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.pc = PC_NULL;
         self.break_resume_pc = PC_NULL;
-        self.listsize = 0;
+        self.list_size = 0;
         self.reset_pcg_to_font();
     }
 
@@ -540,20 +540,20 @@ impl Machine {
     // ---- キーバッファ ----
 
     pub fn key_get_key(&mut self) -> i32 {
-        match self.keybuf.pop_front() {
+        match self.inkey_queue.pop_front() {
             Some(c) => c as i32,
             None => -1,
         }
     }
 
     pub fn key_clear_key(&mut self) {
-        self.keybuf.clear();
+        self.inkey_queue.clear();
         self.is_esc_pressed = false;
     }
 
     pub fn key_push(&mut self, c: u8) {
-        if self.keybuf.len() < 126 {
-            self.keybuf.push_back(c);
+        if self.inkey_queue.len() < 126 {
+            self.inkey_queue.push_back(c);
         }
     }
 
@@ -616,8 +616,8 @@ impl Machine {
     /// カナモードを反転し、未確定バッファをクリアする。
     pub fn toggle_kana(&mut self) {
         self.is_kana_mode = !self.is_kana_mode;
-        self.key_kana_buf_0 = 0;
-        self.key_kana_buf_1 = 0;
+        self.romaji_pending_0 = 0;
+        self.romaji_pending_1 = 0;
     }
 
     /// 対話編集 (REPL) の各キー処理前に呼ぶ。挿入/上書きモードをユーザの
@@ -721,11 +721,11 @@ impl Machine {
             self.screen_putc(c);
             return;
         }
-        let mut buf0 = self.key_kana_buf_0;
-        let mut buf1 = self.key_kana_buf_1;
+        let mut buf0 = self.romaji_pending_0;
+        let mut buf1 = self.romaji_pending_1;
         let out = crate::romajikana::romajikana_input(&mut buf0, &mut buf1, c);
-        self.key_kana_buf_0 = buf0;
-        self.key_kana_buf_1 = buf1;
+        self.romaji_pending_0 = buf0;
+        self.romaji_pending_1 = buf1;
         for &b in &out {
             self.screen_putc(b);
         }
