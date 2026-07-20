@@ -80,7 +80,7 @@ fn btn_negative_returns_bitmask() {
     assert_eq!(vram_line(&m, 1), "0");
 }
 
-/// NEW: LIST 領域がゼロクリアされ listsize/pc/pcbreak も初期化される。
+/// NEW: LIST 領域がゼロクリアされ listsize/pc/break_resume_pc も初期化される。
 #[test]
 fn new_clears_list_and_pc() {
     let mut m = Machine::new();

@@ -31,8 +31,8 @@ impl Machine {
         self.nforstack = 0;
         self.is_expr_mode = false;
         self.pc = commandline_pc;
-        self.lasttoken = 0;
-        self.lasttokenpc = 0;
+        self.last_token_start_pc = 0;
+        self.last_token_end_pc = 0;
     }
 
     /// 1 文ぶんだけ実行する。返り値が `Some` なら停止 (理由付き)、`None`
@@ -91,7 +91,7 @@ impl Machine {
             return Ok(Some(BasicResult::Input));
         }
 
-        if self.stop_execute() {
+        if self.is_break_requested() {
             return Err(ERR_BREAK);
         }
         Ok(None)

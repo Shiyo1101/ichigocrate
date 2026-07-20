@@ -275,7 +275,7 @@ impl Machine {
     pub(super) fn command_cont(&mut self) -> BResult<()> {
         self.expect_statement_end()?;
         if !self.pc_in_list() {
-            self.pc = self.pcbreak;
+            self.pc = self.break_resume_pc;
         }
         if self.pc_in_list() {
             let mut index: u16 = 0;
@@ -302,7 +302,7 @@ impl Machine {
     pub(super) fn command_end(&mut self) -> BResult<()> {
         self.expect_statement_end()?;
         self.pc = PC_NULL;
-        self.pcbreak = PC_NULL;
+        self.break_resume_pc = PC_NULL;
         Ok(())
     }
 
@@ -315,7 +315,7 @@ impl Machine {
             self.list_set_pc(0);
         } else {
             self.pc = PC_NULL;
-            self.pcbreak = PC_NULL;
+            self.break_resume_pc = PC_NULL;
         }
         Ok(())
     }
@@ -434,7 +434,7 @@ impl Machine {
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.listsize = 0;
         self.pc = PC_NULL;
-        self.pcbreak = PC_NULL;
+        self.break_resume_pc = PC_NULL;
         Ok(())
     }
 
@@ -762,7 +762,7 @@ impl Machine {
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.listsize = 0;
         self.pc = PC_NULL;
-        self.pcbreak = PC_NULL;
+        self.break_resume_pc = PC_NULL;
 
         let max = SIZE_RAM_LIST - 2;
         let mut buf = vec![0u8; max];
@@ -916,7 +916,7 @@ impl Machine {
     }
 
     /// 1 行ぶんを走査し、GOTO/GOSUB に続く数値リテラル (TOKEN_NUMBER) を
-    /// 新しい番号で上書きする。`lasttoken..pc` の範囲に右詰めで書き、空いた
+    /// 新しい番号で上書きする。`last_token_start_pc..pc` の範囲に右詰めで書き、空いた
     /// 上位桁はスペースで埋める。トークナイザ状態は呼出後に元へ戻す。
     fn renum_rewrite_line(
         &mut self,
@@ -925,11 +925,11 @@ impl Machine {
         step: i16,
         lines: &[(i16, u16)],
     ) -> BResult<()> {
-        // トークナイザ状態を退避 (token_get は self.pc / lasttoken 等を進めるため)
+        // トークナイザ状態を退避 (token_get は self.pc / last_token_start_pc 等を進めるため)
         let saved_pc = self.pc;
-        let saved_lasttoken = self.lasttoken;
-        let saved_lasttokenpc = self.lasttokenpc;
-        let saved_bk = self.bklasttoken;
+        let saved_lasttoken = self.last_token_start_pc;
+        let saved_lasttokenpc = self.last_token_end_pc;
+        let saved_bk = self.last_token;
         let saved_expr_mode = self.is_expr_mode;
 
         self.is_expr_mode = false;
@@ -938,8 +938,8 @@ impl Machine {
         let line_end = line_start + line_len;
         self.pc = line_start;
         // 直前トークンキャッシュは線をまたぐと整合性が崩れるためクリア
-        self.lasttoken = 0;
-        self.lasttokenpc = 0;
+        self.last_token_start_pc = 0;
+        self.last_token_end_pc = 0;
 
         let mut result: BResult<()> = Ok(());
         while self.pc < line_end {
@@ -953,8 +953,8 @@ impl Machine {
                 TOKEN_GOTO | TOKEN_GOSUB_1 | TOKEN_GOSUB_2 => {
                     let next = self.token_get();
                     if next.code == TOKEN_NUMBER {
-                        // この時点で lasttoken = 先頭桁の位置、pc = 末尾桁の次
-                        let digit_start = self.lasttoken;
+                        // この時点で last_token_start_pc = 先頭桁の位置、pc = 末尾桁の次
+                        let digit_start = self.last_token_start_pc;
                         let digit_end = self.pc;
                         let oldnum = next.value;
                         // 新しい番号 = start + (oldnum 未満の行数) * step
@@ -973,9 +973,9 @@ impl Machine {
 
         // トークナイザ状態を復元
         self.pc = saved_pc;
-        self.lasttoken = saved_lasttoken;
-        self.lasttokenpc = saved_lasttokenpc;
-        self.bklasttoken = saved_bk;
+        self.last_token_start_pc = saved_lasttoken;
+        self.last_token_end_pc = saved_lasttokenpc;
+        self.last_token = saved_bk;
         self.is_expr_mode = saved_expr_mode;
         result
     }

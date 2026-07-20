@@ -72,7 +72,7 @@ impl Machine {
         self.linecnt = 0;
     }
 
-    pub fn video_tick(&self, n: i16) -> i16 {
+    pub fn tick_count(&self, n: i16) -> i16 {
         let v = if n != 0 { self.linecnt } else { self.frames };
         (v & 0x7fff) as i16
     }
@@ -182,18 +182,18 @@ impl Machine {
     /// 通常の文字描画に加え、改行・カーソル移動・編集系の制御コード
     /// ([`crate::keycodes`]) と LOCATE 連動シーケンスをすべてここで処理する。
     pub fn screen_putc(&mut self, c: u8) {
-        if self.screen_locatemode != 0 {
-            if self.screen_locatemode == 2 {
+        if self.locate_pending_bytes != 0 {
+            if self.locate_pending_bytes == 2 {
                 if c < 32 {
                     self.screen_scroll(c as i32);
-                    self.screen_locatemode -= 1;
+                    self.locate_pending_bytes -= 1;
                 } else {
                     self.screen_locate(c as i32 - 32, self.cursory);
                 }
             } else {
                 self.screen_locate(self.cursorx, c as i32 - 32);
             }
-            self.screen_locatemode = self.screen_locatemode.saturating_sub(1);
+            self.locate_pending_bytes = self.locate_pending_bytes.saturating_sub(1);
             return;
         }
         if self.cursory == -1 {
@@ -296,13 +296,13 @@ impl Machine {
                 self.vram_mut()[now..w * h].fill(0);
             }
             LOCATE_PREFIX => {
-                self.screen_locatemode = 2;
+                self.locate_pending_bytes = 2;
             }
             KANA_TOGGLE => {
                 self.is_kana_mode = !self.is_kana_mode;
             }
             INSERT_TOGGLE => {
-                self.is_overwrite = !self.is_overwrite;
+                self.is_overwrite_toggle = !self.is_overwrite_toggle;
             }
             _ => {
                 if c < 32 && c != 0 {
@@ -353,7 +353,7 @@ impl Machine {
     }
 
     /// screen から現在カーソル行の論理行を取得 (Enter 押下時用)
-    pub fn screen_gets(&mut self) -> usize {
+    pub fn screen_line_start(&mut self) -> usize {
         if self.cursory == -1 {
             self.cursory = 0;
             self.cursorx = 0;

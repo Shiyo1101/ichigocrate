@@ -1,6 +1,6 @@
 //! トークナイザと構文パーサ補助。
 //!
-//! `token_back` の 1 トークン戻し読みは `lasttoken` / `lasttokenpc` の
+//! `token_back` の 1 トークン戻し読みは `last_token_start_pc` / `last_token_end_pc` の
 //! キャッシュで実現する。`expect_*` / `parse_*` は commands/expr 双方で
 //! 共有される文/関数呼出パースの定型パターン。
 
@@ -28,13 +28,13 @@ impl Machine {
 
     pub fn token_get(&mut self) -> Token {
         // 直前と同位置への問合せはキャッシュを返す (token_back の戻り対策)
-        if self.pc == self.lasttoken && self.lasttokenpc != 0 {
-            self.pc = self.lasttokenpc;
-            return self.bklasttoken;
+        if self.pc == self.last_token_start_pc && self.last_token_end_pc != 0 {
+            self.pc = self.last_token_end_pc;
+            return self.last_token;
         }
         let mut tok = Token::default();
         let c = self.token_get_char();
-        self.lasttoken = self.pc;
+        self.last_token_start_pc = self.pc;
         if c == 0 {
             tok.code = TOKEN_NULL;
         } else if c.is_ascii_digit() {
@@ -123,7 +123,7 @@ impl Machine {
                     break;
                 }
                 p += len;
-                self.pc = self.lasttoken;
+                self.pc = self.last_token_start_pc;
             }
             if let Some(i) = matched {
                 tok.code = i as u16 + N_TOKEN_OFFSET;
@@ -136,14 +136,14 @@ impl Machine {
                 tok.code = TOKEN_ERROR;
             }
         }
-        self.bklasttoken = tok;
-        self.lasttokenpc = self.pc;
+        self.last_token = tok;
+        self.last_token_end_pc = self.pc;
         tok
     }
 
     /// 1 トークンの先読み専用 (連続呼出は不可)。
     pub fn token_back(&mut self) {
-        self.pc = self.lasttoken;
+        self.pc = self.last_token_start_pc;
     }
 
     // 以下のヘルパは `BResult` を返し、エラーは `Err(BasicError)` として

@@ -90,10 +90,10 @@ pub struct Machine {
     // ---- 以下はクレート内専用 (`pub(crate)`) ----
 
     /// `token_back` 用に直前のトークン取得開始位置を覚える
-    pub(crate) lasttoken: usize,
-    pub(crate) lasttokenpc: usize,
-    pub(crate) bklasttoken: Token,
-    pub(crate) pcbreak: usize,
+    pub(crate) last_token_start_pc: usize,
+    pub(crate) last_token_end_pc: usize,
+    pub(crate) last_token: Token,
+    pub(crate) break_resume_pc: usize,
     /// 直近の停止理由。実行ループ ([`Machine::basic_step`]) が `Err` を捕捉して
     /// 格納し、境界 (`exec_line`) が読み取る。
     pub(crate) last_error: Option<BasicError>,
@@ -108,11 +108,11 @@ pub struct Machine {
     pub(crate) screenh: usize,
     /// 文字描画が上書きモードか (false=挿入, true=上書き)。
     pub(crate) is_overwrite_mode: bool,
-    pub(crate) screen_locatemode: u8,
+    pub(crate) locate_pending_bytes: u8,
 
     /// Insert キーのトグル状態 (false=挿入, true=上書き)。[`Machine::is_overwrite_mode`]
     /// の同期元。
-    pub(crate) is_overwrite: bool,
+    pub(crate) is_overwrite_toggle: bool,
     /// ローマ字かな変換の未確定バッファ (子音 1〜2 文字目)
     pub(crate) key_kana_buf_0: u8,
     pub(crate) key_kana_buf_1: u8,
@@ -186,10 +186,10 @@ impl Machine {
         let mut m = Self {
             ram: vec![0u8; SIZE_RAM],
             pc: PC_NULL,
-            lasttoken: 0,
-            lasttokenpc: 0,
-            bklasttoken: Token::default(),
-            pcbreak: PC_NULL,
+            last_token_start_pc: 0,
+            last_token_end_pc: 0,
+            last_token: Token::default(),
+            break_resume_pc: PC_NULL,
             last_error: None,
             ngosubstack: 0,
             nforstack: 0,
@@ -204,12 +204,12 @@ impl Machine {
             screenh: SCREEN_H,
             is_cursor_visible: true,
             is_overwrite_mode: true,
-            screen_locatemode: 0,
+            locate_pending_bytes: 0,
             is_screen_inverted: false,
             screen_big: 0,
             is_video_enabled: true,
 
-            is_overwrite: false,
+            is_overwrite_toggle: false,
             is_kana_mode: false,
             key_kana_buf_0: 0,
             key_kana_buf_1: 0,
@@ -396,7 +396,7 @@ impl Machine {
         self.clear_vars();
         self.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST].fill(0);
         self.pc = PC_NULL;
-        self.pcbreak = PC_NULL;
+        self.break_resume_pc = PC_NULL;
         self.listsize = 0;
         self.reset_pcg_to_font();
     }
@@ -463,7 +463,7 @@ impl Machine {
                         self.put_chr(c);
                         p += 1;
                     }
-                    self.pcbreak = self.pc;
+                    self.break_resume_pc = self.pc;
                     break;
                 }
                 index = index.wrapping_add(size as u16).wrapping_add(4);
@@ -533,7 +533,7 @@ impl Machine {
     }
 
     /// ESC キーによる中断要求があるか。BASIC 実行ループの停止判定に使う。
-    pub fn stop_execute(&self) -> bool {
+    pub fn is_break_requested(&self) -> bool {
         self.is_esc_pressed
     }
 
@@ -621,11 +621,11 @@ impl Machine {
     }
 
     /// 対話編集 (REPL) の各キー処理前に呼ぶ。挿入/上書きモードをユーザの
-    /// トグル状態 `is_overwrite` に同期する。
+    /// トグル状態 `is_overwrite_toggle` に同期する。
     /// プログラム実行中の出力は basic_execute が上書きへ固定するので、
     /// ホストは実行中はこれを呼ばないこと。
     pub fn sync_insert_mode(&mut self) {
-        self.is_overwrite_mode = self.is_overwrite;
+        self.is_overwrite_mode = self.is_overwrite_toggle;
     }
 
     /// カーソル描画幅。上書きモードは文字全体 (8px) を反転、挿入モードは
@@ -668,9 +668,9 @@ impl Machine {
         };
 
         let saved_pc = self.pc;
-        let saved_lasttoken = self.lasttoken;
-        let saved_lasttokenpc = self.lasttokenpc;
-        let saved_bk = self.bklasttoken;
+        let saved_lasttoken = self.last_token_start_pc;
+        let saved_lasttokenpc = self.last_token_end_pc;
+        let saved_bk = self.last_token;
         let saved_expr_mode = self.is_expr_mode;
         let saved_linebuf: Vec<u8> =
             self.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + N_LINEBUF].to_vec();
@@ -681,8 +681,8 @@ impl Machine {
         self.ram[OFFSET_RAM_LINEBUF + n] = 0;
 
         self.pc = OFFSET_RAM_LINEBUF;
-        self.lasttoken = 0;
-        self.lasttokenpc = 0;
+        self.last_token_start_pc = 0;
+        self.last_token_end_pc = 0;
         self.is_expr_mode = false;
         if let Ok(value) = self.eval_expression() {
             self.var_set(target, value);
@@ -691,9 +691,9 @@ impl Machine {
         self.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + N_LINEBUF]
             .copy_from_slice(&saved_linebuf);
         self.pc = saved_pc;
-        self.lasttoken = saved_lasttoken;
-        self.lasttokenpc = saved_lasttokenpc;
-        self.bklasttoken = saved_bk;
+        self.last_token_start_pc = saved_lasttoken;
+        self.last_token_end_pc = saved_lasttokenpc;
+        self.last_token = saved_bk;
         self.is_expr_mode = saved_expr_mode;
 
         self.put_chr(b'\n');

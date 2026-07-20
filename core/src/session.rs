@@ -272,7 +272,7 @@ impl Session {
     fn execute_current_line(&mut self) -> Option<BasicError> {
         // Enter の改行を VRAM へ書き込んでから行を読む。
         self.machine.screen_putc(b'\n');
-        let p = self.machine.screen_gets();
+        let p = self.machine.screen_line_start();
         // VRAM から行長を測り生バイトのスライスを得る (String 経由は 0x80-0xFF
         // のグラフィック文字を UTF-8 に展開してしまうため不可)。
         let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
