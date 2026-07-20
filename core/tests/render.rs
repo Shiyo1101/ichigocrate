@@ -107,7 +107,7 @@ fn cursor_insert_inverts_left_half_only() {
     // 挿入モードカーソルは左半分 (col < 4) のみ反転。
     for row in 0..FONT_H {
         for col in 0..FONT_W {
-            let expected = if col < FONT_W / 2 { 1 } else { 0 };
+            let expected = u8::from(col < FONT_W / 2);
             assert_eq!(buf[row * IMG_W + col], expected, "px ({col},{row})");
         }
     }

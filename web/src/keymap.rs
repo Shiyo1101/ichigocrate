@@ -5,42 +5,6 @@
 
 use ichigocrate_core::keycodes as kc;
 
-/// keymap の戻り値のうち REPL 編集を進める制御コード群 (input_control 経由)。
-pub(crate) fn is_edit_control_code(c: u8) -> bool {
-    matches!(
-        c,
-        kc::BACKSPACE
-            | kc::DELETE
-            | kc::CURSOR_LEFT
-            | kc::CURSOR_RIGHT
-            | kc::CURSOR_UP
-            | kc::CURSOR_DOWN
-            | kc::TAB
-            | kc::HOME
-            | kc::END
-            | kc::PAGE_UP
-            | kc::PAGE_DOWN
-            | kc::INSERT_TOGGLE
-            | kc::LINE_SPLIT
-    )
-}
-
-/// F1-F9 のコマンド割当。3 番目は「Enter まで自動実行するか」。
-pub(crate) fn fkey_binding(code: &str) -> Option<(&'static str, bool)> {
-    Some(match code {
-        "F1" => ("CLS", true),
-        "F2" => ("LOAD", false),
-        "F3" => ("SAVE", false),
-        "F4" => ("LIST", true),
-        "F5" => ("RUN", true),
-        "F6" => ("?FREE()", true),
-        "F7" => ("?VER()", true),
-        "F8" => ("VIDEO", false),
-        "F9" => ("FILES", true),
-        _ => return None,
-    })
-}
-
 /// `KeyboardEvent.code` を USB HID Keyboard Usage ID へ変換する。
 /// 添字は HID Usage ID に一致させ (例: Digit2=0x1f、BracketLeft=0x2f)、
 /// 物理キー位置で keymap を引いて KBD の US/JA 切替を OS 非依存にする入り口。

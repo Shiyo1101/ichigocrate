@@ -1,43 +1,34 @@
 //! `<canvas>` へ白黒画面をそのまま転送しながら VM を駆動する受動ランナー本体。
+//!
+//! 実行状態機械 (REPL/RUN/INPUT/WAIT) は core の [`Session`] が持ち、ここは
+//! ブラウザイベントの変換・canvas 描画・JS コールバックだけを担う。
 
 use ichigocrate_core::{
-    exec_line, exec_line_bytes, keycodes as kc,
     ram::IJB_SIZEOF_ARRAY,
     render::{render_mono, RenderState, IMG_H, IMG_W},
-    BasicError, BasicResult, LineOutcome, Machine, OFFSET_RAM_VRAM, PC_NULL, SIZE_RAM_VRAM,
+    session::Session,
+    BasicError, Machine,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::{Clamped, JsCast};
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
-use crate::keymap::{code_to_btn_code, code_to_hid, fkey_binding, is_edit_control_code};
+use crate::keymap::{code_to_btn_code, code_to_hid};
 use crate::output::{detect_scroll, screen_char};
 use crate::storage::WebStorage;
-
-/// IchigoJam の論理 1 フレーム = 1/60 秒 (ミリ秒)。
-const FRAME_MS: f64 = 1000.0 / 60.0;
-/// 1 フレームで進める最大文数 (UI 凍結防止。ネイティブ版と同値)。
-const MAX_STEPS_PER_FRAME: usize = 2000;
 
 /// IchigoJam VM を 1 つ抱えるランナー。JS から `new IchigoCrateRunner(canvas)` で生成。
 #[wasm_bindgen]
 pub struct IchigoCrateRunner {
-    machine: Machine,
+    /// 実行状態機械 (REPL/RUN/INPUT/WAIT) を持つ core 共通セッション。
+    session: Session,
     ctx: CanvasRenderingContext2d,
     /// 使い回す 1bpp バッファ (0=消灯 1=点灯)。
     mono: Vec<u8>,
     /// 使い回す RGBA バッファ (canvas へ転送)。
     rgba: Vec<u8>,
-    /// プログラム実行中フラグ (REPL 行確定や RUN で true)。
-    is_running: bool,
-    /// 60Hz tick を次に進める基準時刻 (ms)。
-    next_tick_ms: f64,
-    /// WAIT の実時間終了予定時刻 (ms)。
-    wait_until_ms: Option<f64>,
     /// 起動時刻 (ms)。カーソル点滅位相の基準。`None` は初回 tick 未到達。
     start_ms: Option<f64>,
-    /// INPUT 対話入力待ち中の値開始 VRAM 座標 (cursorx, cursory)。
-    input_origin: Option<(i32, i32)>,
     /// onPrint コールバック (画面出力ストリーミング)。未登録なら差分監視も行わない。
     on_print: Option<js_sys::Function>,
     /// onError コールバック (実行時エラー通知)。即時文・RUN 中の停止理由を構造化して流す。
@@ -47,10 +38,6 @@ pub struct IchigoCrateRunner {
     /// onPrint で出力済みの位置 (出力カーソル列・行)。ここから現在のカーソルまでが新規。
     out_x: usize,
     out_y: usize,
-    /// 次回の `execute_current_line` で "OK" 表示を抑止するフラグ。F1 (CLS)
-    /// ショートカットは画面を消すのが目的なので、直後に "OK" が出ると空白画面
-    /// にならず UX を損なう。
-    suppress_next_ok: bool,
 }
 
 #[wasm_bindgen]
@@ -81,30 +68,24 @@ impl IchigoCrateRunner {
             storage_prefix.unwrap_or_default(),
             persist.unwrap_or(true),
         )));
-        machine.power_on_reset();
-        machine.put_str("OK\n");
+        let session = Session::new(machine);
 
         // onPrint の差分基準を現在 (起動バナー直後) に合わせ、バナーは流さない。
-        let prev_vram = machine.vram().to_vec();
-        let out_x = machine.cursorx.max(0) as usize;
-        let out_y = machine.cursory.max(0) as usize;
+        let prev_vram = session.machine.vram().to_vec();
+        let out_x = session.machine.cursorx.max(0) as usize;
+        let out_y = session.machine.cursory.max(0) as usize;
 
         Ok(IchigoCrateRunner {
-            machine,
+            session,
             ctx,
             mono: vec![0; IMG_W * IMG_H],
             rgba: vec![0; IMG_W * IMG_H * 4],
-            is_running: false,
-            next_tick_ms: 0.0,
-            wait_until_ms: None,
             start_ms: None,
-            input_origin: None,
             on_print: None,
             on_error: None,
             prev_vram,
             out_x,
             out_y,
-            suppress_next_ok: false,
         })
     }
 
@@ -112,44 +93,11 @@ impl IchigoCrateRunner {
     pub fn tick(&mut self, now_ms: f64) {
         if self.start_ms.is_none() {
             self.start_ms = Some(now_ms);
-            self.next_tick_ms = now_ms;
         }
 
-        // 60Hz tick (PSG / frames カウンタ) を実時間に同期して必要回数進める。
-        let mut iters = 0;
-        while self.next_tick_ms <= now_ms && iters < 8 {
-            self.machine.frames = self.machine.frames.wrapping_add(1);
-            self.machine.psg_tick();
-            self.next_tick_ms += FRAME_MS;
-            iters += 1;
+        if let Some(e) = self.session.tick(now_ms) {
+            self.report_error(e);
         }
-        // 大きく遅れたら追いつくのを諦めて基準をリセット。
-        if self.next_tick_ms + FRAME_MS * 8.0 < now_ms {
-            self.next_tick_ms = now_ms;
-        }
-
-        if let Some(deadline) = self.wait_until_ms {
-            if now_ms >= deadline {
-                self.wait_until_ms = None;
-            }
-        }
-        // BASIC 側で積まれた WAIT を実時間の期限へ変換。
-        if self.machine.wait_frames > 0 {
-            let extra = FRAME_MS * self.machine.wait_frames as f64;
-            let base = self.wait_until_ms.unwrap_or(now_ms);
-            self.wait_until_ms = Some(base + extra);
-            self.machine.wait_frames = 0;
-        }
-
-        self.machine.is_program_running = self.is_running;
-
-        if self.is_running && self.wait_until_ms.is_none() {
-            self.step_chunk();
-        }
-
-        // 待機 (REPL) 中はカーソルを表示し挿入モードを同期する。これを毎フレーム
-        // 行わないと、コマンド実行後に次のキー入力まで点滅カーソルが出ない
-        self.sync_before_input();
 
         self.collect_output();
 
@@ -165,53 +113,44 @@ impl IchigoCrateRunner {
     pub fn on_key(&mut self, code: &str, shift: bool, alt: bool, pressed: bool) {
         // INKEY()/BTN() 用の押下状態は押下/解放の両方を反映する。
         if let Some(btn) = code_to_btn_code(code) {
-            self.machine.key_set_down(btn, pressed);
+            self.session.machine.key_set_down(btn, pressed);
         }
         if !pressed {
             return;
         }
 
-        self.sync_before_input();
-        let executing = self.machine.is_executing();
-
-        // ホスト側で別処理するキー (keymap には流さない)。
+        // ホスト側で別処理するキー (keymap には流さない)。状態に応じた
+        // 振り分けは Session が担う。
         match code {
             "Enter" | "NumpadEnter" => {
-                if executing {
-                    self.machine.key_push(b'\n');
-                } else if self.input_origin.is_some() {
-                    self.complete_input();
-                } else {
-                    self.execute_current_line();
+                if let Some(e) = self.session.on_enter() {
+                    self.report_error(e);
                 }
                 return;
             }
             "Escape" => {
-                self.machine.is_esc_pressed = true;
-                if self.input_origin.is_some() {
-                    self.cancel_input();
-                }
+                self.session.on_escape();
                 return;
             }
             "F10" => {
-                self.machine.toggle_kana();
+                self.session.machine.toggle_kana();
                 return;
             }
             _ => {}
         }
 
-        // F1-F9 コマンド割当 (REPL 待機中のみ。実行中/入力待ち中は無効)。
-        if !self.is_running && self.input_origin.is_none() {
-            if let Some((cmd, run)) = fkey_binding(code) {
-                self.type_fkey_command(cmd, run);
-                return;
+        // F1-F9 コマンド割当。受理条件 (REPL 待機中のみ) は Session が判定する。
+        if let Some(n) = fkey_number(code) {
+            if let Some(e) = self.session.press_fkey(n) {
+                self.report_error(e);
             }
+            return;
         }
 
-        let Some(hid) = code_to_hid(code, self.machine.keyboard_id()) else {
+        let Some(hid) = code_to_hid(code, self.session.machine.keyboard_id()) else {
             return;
         };
-        let mut c = self.machine.keymap_lookup(hid, shift, alt);
+        let mut c = self.session.machine.keymap_lookup(hid, shift, alt);
         if c == 0 {
             return;
         }
@@ -219,18 +158,20 @@ impl IchigoCrateRunner {
         if c.is_ascii_lowercase() {
             c -= b'a' - b'A';
         }
-        self.feed_char(c);
+        if let Some(e) = self.session.feed_char(c) {
+            self.report_error(e);
+        }
     }
 
     /// 現在カナモードか (タイトル表示などに使う)。
     pub fn is_kana(&self) -> bool {
-        self.machine.is_kana_mode
+        self.session.machine.is_kana_mode
     }
 
     /// LED が点灯中か (`LED 1` で true)。実機 LED の代わりにフロント側が画面枠を
     /// 赤くするなどの表示に使う (枠描画はフロントの責務)。
     pub fn is_led(&self) -> bool {
-        self.machine.is_led_on
+        self.session.machine.is_led_on
     }
 }
 
@@ -254,7 +195,9 @@ impl IchigoCrateRunner {
         for ch in text.chars() {
             let u = ch as u32;
             if u < 0x80 {
-                self.feed_char(u as u8);
+                if let Some(e) = self.session.feed_char(u as u8) {
+                    self.report_error(e);
+                }
             }
         }
     }
@@ -280,49 +223,44 @@ impl IchigoCrateRunner {
         self.exec_line_str("RUN");
     }
 
-    /// 実機の RESET ボタン (電源 ON/OFF による再起動) 相当。BASIC の `RESET`
-    /// コマンドと同じ [`Machine::power_on_reset`] へ委譲するので、LED・画面・
+    /// 実機の RESET ボタン (電源 ON/OFF による再起動) 相当。LED・画面・
     /// カナ入力・VIDEO 設定なども含めて丸ごと起動直後の状態へ戻る。
     #[wasm_bindgen(js_name = "reset")]
     pub fn reset(&mut self) {
-        self.machine.power_on_reset();
-        self.machine.put_str("OK\n");
-        self.is_running = false;
-        self.input_origin = None;
-        self.wait_until_ms = None;
+        self.session.reset();
 
         // onPrint の差分基準を現在 (起動バナー直後) に合わせ、バナーは流さない (new() と同じ扱い)。
-        self.prev_vram = self.machine.vram().to_vec();
-        self.out_x = self.machine.cursorx.max(0) as usize;
-        self.out_y = self.machine.cursory.max(0) as usize;
+        self.prev_vram = self.session.machine.vram().to_vec();
+        self.out_x = self.session.machine.cursorx.max(0) as usize;
+        self.out_y = self.session.machine.cursory.max(0) as usize;
     }
 
     /// INKEY()/BTN() 用の物理キー押下。`code` は IchigoJam キーコード
     /// (例: 28=←, 32=スペース, 88='X')。
     #[wasm_bindgen(js_name = "keyDown")]
     pub fn key_down(&mut self, code: u8) {
-        self.machine.key_set_down(code, true);
+        self.session.machine.key_set_down(code, true);
     }
 
     /// INKEY()/BTN() 用の物理キー解放。
     #[wasm_bindgen(js_name = "keyUp")]
     pub fn key_up(&mut self, code: u8) {
-        self.machine.key_set_down(code, false);
+        self.session.machine.key_set_down(code, false);
     }
 
     /// 実行中プログラムを中断する (ESC 相当)。暴走停止に使う。
     #[wasm_bindgen(js_name = "break")]
     pub fn break_(&mut self) {
-        self.machine.is_esc_pressed = true;
+        self.session.break_program();
     }
 
     /// 画面 (VRAM) を文字列スナップショットとして取得する。各行の末尾空白は
     /// 詰め、行は改行で連結する。印字不能・グラフィック文字は `?` に潰す。
     #[wasm_bindgen(js_name = "getScreenText")]
     pub fn get_screen_text(&self) -> String {
-        let cols = self.machine.screen_cols();
-        let rows = self.machine.screen_rows();
-        let vram = self.machine.vram();
+        let cols = self.session.machine.screen_cols();
+        let rows = self.session.machine.screen_rows();
+        let vram = self.session.machine.vram();
         let mut out = String::new();
         for y in 0..rows {
             let row = &vram[y * cols..(y + 1) * cols];
@@ -343,7 +281,9 @@ impl IchigoCrateRunner {
         };
         let up = ch.to_ascii_uppercase();
         if up.is_ascii_uppercase() {
-            self.machine.var_get(IJB_SIZEOF_ARRAY + (up - b'A') as usize)
+            self.session
+                .machine
+                .var_get(IJB_SIZEOF_ARRAY + (up - b'A') as usize)
         } else {
             0
         }
@@ -352,7 +292,7 @@ impl IchigoCrateRunner {
     /// メモリ (PEEK 相当) を読む。
     #[wasm_bindgen(js_name = "peek")]
     pub fn peek(&self, addr: i32) -> u8 {
-        self.machine.peek(addr)
+        self.session.machine.peek(addr)
     }
 
     /// 画面出力ストリーミングのコールバックを登録する。`cb(chunk: string)` が
@@ -380,116 +320,17 @@ impl IchigoCrateRunner {
     }
 }
 
+/// `KeyboardEvent.code` の `"F1"`-`"F9"` を F キー番号 1-9 へ変換する。
+fn fkey_number(code: &str) -> Option<u8> {
+    let n = code.strip_prefix('F')?.parse::<u8>().ok()?;
+    (1..=9).contains(&n).then_some(n)
+}
+
 impl IchigoCrateRunner {
-    /// プログラム実行を 1 フレーム分 (最大 MAX_STEPS_PER_FRAME 文) 進める。
-    /// 完了・INPUT 待ち・WAIT 発火で打ち切る。tick() と exec 系で共有する。
-    fn step_chunk(&mut self) {
-        for _ in 0..MAX_STEPS_PER_FRAME {
-            if self.machine.wait_frames > 0 {
-                break; // ステップ中に WAIT 発火 → 次フレームへ
-            }
-            if let Some(res) = self.machine.basic_step() {
-                self.is_running = false;
-                match res {
-                    // 即時実行の完了はここが本当の到達点 (pc は PC_NULL に戻らず
-                    // LINEBUF の終端を指したまま返るため)。F1 (CLS) の "OK" 抑止
-                    // もここで判定しないと効かない。
-                    BasicResult::Execute => {
-                        if !std::mem::take(&mut self.suppress_next_ok) {
-                            self.machine.put_str("OK\n");
-                        }
-                    }
-                    BasicResult::Input => self.begin_input(),
-                    BasicResult::StopOrErr => {
-                        if let Some(e) = self.machine.last_error() {
-                            self.report_error(e);
-                        }
-                    }
-                    BasicResult::Edit => {}
-                }
-                self.machine.is_esc_pressed = false;
-                break;
-            }
-            if self.machine.pc == PC_NULL {
-                self.is_running = false;
-                if !std::mem::take(&mut self.suppress_next_ok) {
-                    self.machine.put_str("OK\n");
-                }
-                break;
-            }
-        }
-    }
-
-    /// 解決済みの 1 文字をモード適応で流す (`on_key` と `type` の共通経路)。
-    /// 実行中は keybuf (INKEY/INPUT) へ、停止中は REPL 行編集へ振り分ける。
-    fn feed_char(&mut self, c: u8) {
-        self.sync_before_input();
-        if self.machine.is_executing() {
-            self.machine.key_push(c);
-            return;
-        }
-        match c {
-            b'\n' | b'\r' => {
-                if self.input_origin.is_some() {
-                    self.complete_input();
-                } else {
-                    self.execute_current_line();
-                }
-            }
-            // カナモード中の Backspace は未確定バッファ管理のため input_putc を通す。
-            _ if is_edit_control_code(c) => {
-                if c == kc::BACKSPACE && self.machine.is_kana_mode {
-                    self.machine.input_putc(c);
-                } else {
-                    self.machine.input_control(c);
-                }
-            }
-            // グラフィック文字 (128-255) はローマ字 → カナ変換を通さない。
-            _ if c >= 128 => self.machine.screen_putc(c),
-            _ => self.machine.input_putc(c),
-        }
-    }
-
-    /// REPL 1 行を直接実行する。停止中 (REPL) のみ受理し、実行中・入力待ち中は無視。
+    /// REPL 1 行を直接実行し、エラーがあれば onError へ流す。
     fn exec_line_str(&mut self, line: &str) {
-        if self.is_running || self.input_origin.is_some() {
-            return;
-        }
-        self.machine.is_program_running = false;
-        self.machine.is_esc_pressed = false;
-        match exec_line(&mut self.machine, line) {
-            Ok(LineOutcome::Executed) => self.finish_executed(),
-            Ok(LineOutcome::Edited) => {}
-            Ok(LineOutcome::AwaitingInput) => self.begin_input(),
-            Err(e) => self.report_error(e),
-        }
-    }
-
-    /// `exec_line`/`execute_current_line` が `Executed` を返した後の共通処理。
-    ///
-    /// IchigoJam は実行後も pc を非 NULL に残し後続の basic_step で完了する設計
-    /// なので、即時文はここで 1 フレーム分まで同期実行して完了させる。終わらなければ
-    /// (RUN の無限ループ等) is_running を立ててフレーム側へ委譲し、ブラウザを固めない。
-    fn finish_executed(&mut self) {
-        if self.machine.pc != PC_NULL {
-            // 即時実行の完了もここを通る (pc は PC_NULL に戻らず LINEBUF の終端を
-            // 指したまま返るため)。実際の完了検知・"OK" 表示・suppress_next_ok
-            // の消費は step_chunk 側で行う。
-            self.is_running = true;
-            self.machine.is_program_running = true;
-            if self.wait_until_ms.is_none() {
-                self.step_chunk();
-            }
-        } else if !std::mem::take(&mut self.suppress_next_ok) {
-            self.machine.put_str("OK\n");
-        }
-    }
-
-    fn sync_before_input(&mut self) {
-        self.machine.is_program_running = self.is_running;
-        if !self.is_running {
-            self.machine.sync_insert_mode();
-            self.machine.is_cursor_visible = true;
+        if let Some(e) = self.session.exec_line(line.as_bytes()) {
+            self.report_error(e);
         }
     }
 
@@ -501,11 +342,11 @@ impl IchigoCrateRunner {
         let Some(cb) = self.on_print.clone() else {
             return;
         };
-        let cols = self.machine.screen_cols();
-        let rows = self.machine.screen_rows();
-        let vram = self.machine.vram().to_vec();
-        let cx = (self.machine.cursorx.max(0) as usize).min(cols);
-        let cy = (self.machine.cursory.max(0) as usize).min(rows.saturating_sub(1));
+        let cols = self.session.machine.screen_cols();
+        let rows = self.session.machine.screen_rows();
+        let vram = self.session.machine.vram().to_vec();
+        let cx = (self.session.machine.cursorx.max(0) as usize).min(cols);
+        let cy = (self.session.machine.cursory.max(0) as usize).min(rows.saturating_sub(1));
 
         let scroll = detect_scroll(&self.prev_vram, &vram, cols, rows);
         if scroll > 0 {
@@ -555,8 +396,8 @@ impl IchigoCrateRunner {
     }
 
     fn render(&mut self, blink_phase: u32) {
-        let state = RenderState::capture(&self.machine, blink_phase);
-        render_mono(&mut self.mono, &self.machine, &state);
+        let state = RenderState::capture(&self.session.machine, blink_phase);
+        render_mono(&mut self.mono, &self.session.machine, &state);
         for (i, &on) in self.mono.iter().enumerate() {
             let v = if on != 0 { 255 } else { 0 };
             let p = i * 4;
@@ -572,76 +413,5 @@ impl IchigoCrateRunner {
         ) {
             let _ = self.ctx.put_image_data(&img, 0.0, 0.0);
         }
-    }
-
-    /// F キーで指定コマンドを VRAM に挿入する。`run` が true なら直ちに実行。
-    /// 本家同様、カーソル行に何が書かれていても消してから書き込むので、
-    /// 編集途中の行があってもコマンドは常に単独で表示・実行される。
-    fn type_fkey_command(&mut self, cmd: &str, run: bool) {
-        self.machine.screen_clear_line();
-        for b in cmd.bytes() {
-            self.machine.screen_putc(b);
-        }
-        if run {
-            // CLS 直後は画面を空白のまま保ちたいので "OK" 表示を抑止する。
-            self.suppress_next_ok = cmd == "CLS";
-            self.execute_current_line();
-        }
-    }
-
-    /// Enter 押下時: 現在行を生バイト列として取り出し REPL 実行する。
-    fn execute_current_line(&mut self) {
-        self.machine.screen_putc(b'\n');
-        let p = self.machine.screen_gets();
-        // VRAM から行長を測り生バイトのスライスを得る (String 経由は 0x80-0xFF を
-        // UTF-8 展開してしまうため不可)。
-        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
-        let len = self.machine.ram[p..vram_end]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(vram_end - p);
-        if len == 0 {
-            return;
-        }
-        self.machine.is_esc_pressed = false;
-        let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
-        match exec_line_bytes(&mut self.machine, &line) {
-            Ok(LineOutcome::Executed) => self.finish_executed(),
-            // 行編集 (LIST 追加・削除) は OK を表示しない (IchigoJam 慣習)。
-            Ok(LineOutcome::Edited) => {}
-            // 即時モードの INPUT。対話入力モードへ移行する。
-            Ok(LineOutcome::AwaitingInput) => self.begin_input(),
-            // エラーメッセージは VRAM に書き済 (basic_print_error)。onError にも通知。
-            Err(e) => self.report_error(e),
-        }
-    }
-
-    /// INPUT 入力待ちの開始。プロンプト直後のカーソル位置を値の開始に記録する。
-    fn begin_input(&mut self) {
-        self.input_origin = Some((self.machine.cursorx, self.machine.cursory));
-        self.machine.is_esc_pressed = false;
-    }
-
-    /// INPUT の入力確定。値テキストを読み取り変数へ反映して実行を再開する。
-    fn complete_input(&mut self) {
-        let (ox, oy) = self.input_origin.take().unwrap_or((0, 0));
-        let w = self.machine.screen_cols();
-        let start = OFFSET_RAM_VRAM + ox as usize + oy as usize * w;
-        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
-        let len = self.machine.ram[start..vram_end]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(vram_end - start);
-        let line: Vec<u8> = self.machine.ram[start..start + len].to_vec();
-        self.machine.input_complete(&line);
-        self.is_running = true;
-    }
-
-    /// INPUT 入力中の ESC 中断。代入せず REPL へ戻る。
-    fn cancel_input(&mut self) {
-        self.input_origin = None;
-        self.machine.cancel_input();
-        self.machine.put_str("OK\n");
-        self.machine.is_esc_pressed = false;
     }
 }

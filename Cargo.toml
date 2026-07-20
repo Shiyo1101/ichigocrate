@@ -7,6 +7,32 @@ edition = "2021"
 license = "MIT"
 authors = ["Rust port of IchigoJam BASIC"]
 
+# clippy::pedantic を既定で有効にし、意図的に採らない lint をここで宣言する。
+# 「なぜ許容するか」を宣言的に残すことで、後続の修正で方針が揺れないようにする。
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# 元 C ファームの数値挙動 (暗黙の切り詰め・符号変換) を保つ意図的キャスト。
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+cast_precision_loss = "allow"
+# 元 C の制御構造・定数表現・関数粒度をそのまま写した箇所を許す。
+if_not_else = "allow"
+unreadable_literal = "allow"
+match_same_arms = "allow"
+many_single_char_names = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+items_after_statements = "allow"
+comparison_chain = "allow"
+# RAM オフセットやトークン定数などの C 風定数群は wildcard で取り込む。
+wildcard_imports = "allow"
+# 日本語ドキュメント・内部 API 中心のため、体裁の一律強制はしない。
+doc_markdown = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

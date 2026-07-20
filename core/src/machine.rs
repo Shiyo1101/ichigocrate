@@ -452,7 +452,7 @@ impl Machine {
                 let line_end_in_ram = OFFSET_RAM_LIST + index as usize + size + 4;
                 if self.pc <= line_end_in_ram {
                     let line_no = n;
-                    let s = format!(" in {}\n{} ", line_no, line_no);
+                    let s = format!(" in {line_no}\n{line_no} ");
                     self.put_str(&s);
                     let mut p = OFFSET_RAM_LIST + index as usize + 3;
                     while p < self.ram.len() {

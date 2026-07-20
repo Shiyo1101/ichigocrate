@@ -17,6 +17,7 @@ pub mod ram;
 pub mod render;
 pub mod romajikana;
 pub mod screen;
+pub mod session;
 pub mod tokens;
 
 pub use errors::BasicError;
