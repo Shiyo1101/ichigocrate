@@ -31,7 +31,7 @@ fn cls_clears_vram() {
 #[test]
 fn run_with_no_program_is_safe() {
     let mut m = Machine::new();
-    assert_eq!(m.listsize, 0);
+    assert_eq!(m.list_size, 0);
     let r = exec_line_bytes(&mut m, b"RUN");
     assert!(r.is_ok());
     assert_eq!(m.pc, PC_NULL, "空プログラムの RUN 後は pc が NULL");
@@ -80,15 +80,15 @@ fn btn_negative_returns_bitmask() {
     assert_eq!(vram_line(&m, 1), "0");
 }
 
-/// NEW: LIST 領域がゼロクリアされ listsize/pc/pcbreak も初期化される。
+/// NEW: LIST 領域がゼロクリアされ list_size/pc/break_resume_pc も初期化される。
 #[test]
 fn new_clears_list_and_pc() {
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "10 ?\"X\"");
     let _ = exec_line(&mut m, "20 ?\"Y\"");
-    assert!(m.listsize > 0);
+    assert!(m.list_size > 0);
     let _ = exec_line(&mut m, "NEW");
-    assert_eq!(m.listsize, 0);
+    assert_eq!(m.list_size, 0);
     assert_eq!(m.pc, PC_NULL);
     // LIST 先頭バイトが全部 0 になっていることをサンプリング
     for &b in &m.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + 32] {
@@ -253,7 +253,7 @@ fn beep_no_args_uses_default_tone() {
     assert!(m.current_tone_hz > 0.0);
 }
 
-/// PLAY (引数なし): MML 停止。psgmml が None になり
+/// PLAY (引数なし): MML 停止。psg_mml_pos が None になり
 /// 無音になる。
 #[test]
 fn play_with_no_arg_stops_mml() {

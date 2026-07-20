@@ -49,39 +49,40 @@ impl Machine {
 
     /// 表示中の論理画面の桁数 (拡大時は縮む)。ホストの描画ループが参照する。
     pub fn screen_cols(&self) -> usize {
-        self.screenw
+        self.text_cols
     }
 
     /// 表示中の論理画面の行数 (拡大時は縮む)。
     pub fn screen_rows(&self) -> usize {
-        self.screenh
+        self.text_rows
     }
 
     /// VIDEO オン処理。拡大段階に合わせて論理画面サイズを
-    /// `SCREEN_W/H >> screen_big` に再設定する。これにより折り返し位置・
+    /// `SCREEN_W/H >> screen_zoom_shift` に再設定する。これにより折り返し位置・
     /// カーソル可動範囲が拡大倍率へ追従する。
     pub fn video_on(&mut self) {
         self.is_video_enabled = true;
-        self.screenw = SCREEN_W >> self.screen_big as u32;
-        self.screenh = SCREEN_H >> self.screen_big as u32;
+        self.text_cols = SCREEN_W >> self.screen_zoom_shift as u32;
+        self.text_rows = SCREEN_H >> self.screen_zoom_shift as u32;
     }
 
-    /// CLT: TICK() が返すフレームカウンタ (`frames`) と行カウンタ (`linecnt`) を 0 に戻す。
+    /// CLT: TICK() が返すフレームカウンタを 0 に戻す。
     pub fn reset_tick_counters(&mut self) {
         self.frames = 0;
-        self.linecnt = 0;
     }
 
-    pub fn video_tick(&self, n: i16) -> i16 {
-        let v = if n != 0 { self.linecnt } else { self.frames };
+    /// TICK(n) の現在値を返す (n=0: フレームカウンタ, n≠0: 行カウンタ)。
+    pub fn tick_count(&self, n: i16) -> i16 {
+        // n≠0 の行カウンタは、本移植に映像走査が無く増えないため常に 0。
+        let v = if n != 0 { 0 } else { self.frames };
         (v & 0x7fff) as i16
     }
 
     pub fn screen_get(&self, x: i32, y: i32) -> u8 {
-        if x < 0 || x >= self.screenw as i32 || y < 0 || y >= self.screenh as i32 {
+        if x < 0 || x >= self.text_cols as i32 || y < 0 || y >= self.text_rows as i32 {
             return 0;
         }
-        self.vram()[(y as usize) * self.screenw + x as usize]
+        self.vram()[(y as usize) * self.text_cols + x as usize]
     }
 
     pub fn screen_get_current(&self) -> u8 {
@@ -91,21 +92,21 @@ impl Machine {
     pub fn screen_locate(&mut self, mut x: i32, mut y: i32) {
         if x < 0 {
             x = 0;
-        } else if x >= self.screenw as i32 {
-            x = self.screenw as i32 - 1;
+        } else if x >= self.text_cols as i32 {
+            x = self.text_cols as i32 - 1;
         }
         if y < 0 {
             y = -1;
-        } else if y >= self.screenh as i32 {
-            y = self.screenh as i32 - 1;
+        } else if y >= self.text_rows as i32 {
+            y = self.text_rows as i32 - 1;
         }
         self.cursorx = x;
         self.cursory = y;
     }
 
     pub fn screen_scroll(&mut self, n: i32) {
-        let w = self.screenw;
-        let h = self.screenh;
+        let w = self.text_cols;
+        let h = self.text_rows;
         // SCROLL コマンドは 0..=3 と 28..=31 のどちらの形式でも受ける。
         let dir = match n {
             0 | SCROLL_UP => SCROLL_UP,
@@ -151,7 +152,7 @@ impl Machine {
     }
 
     fn screen_enter(&mut self) {
-        if self.cursory == self.screenh as i32 - 1 {
+        if self.cursory == self.text_rows as i32 - 1 {
             self.screen_scroll(0);
         } else {
             self.cursory += 1;
@@ -167,7 +168,7 @@ impl Machine {
         if self.is_overwrite_mode {
             return; // 上書きモードは自由移動
         }
-        let w = self.screenw;
+        let w = self.text_cols;
         let row = self.cursory as usize * w;
         // カーソル先に文字があるならスナップ不要 (テキスト上)
         if self.vram()[row + self.cursorx as usize] != 0 {
@@ -182,25 +183,25 @@ impl Machine {
     /// 通常の文字描画に加え、改行・カーソル移動・編集系の制御コード
     /// ([`crate::keycodes`]) と LOCATE 連動シーケンスをすべてここで処理する。
     pub fn screen_putc(&mut self, c: u8) {
-        if self.screen_locatemode != 0 {
-            if self.screen_locatemode == 2 {
+        if self.locate_pending_bytes != 0 {
+            if self.locate_pending_bytes == 2 {
                 if c < 32 {
                     self.screen_scroll(c as i32);
-                    self.screen_locatemode -= 1;
+                    self.locate_pending_bytes -= 1;
                 } else {
                     self.screen_locate(c as i32 - 32, self.cursory);
                 }
             } else {
                 self.screen_locate(self.cursorx, c as i32 - 32);
             }
-            self.screen_locatemode = self.screen_locatemode.saturating_sub(1);
+            self.locate_pending_bytes = self.locate_pending_bytes.saturating_sub(1);
             return;
         }
         if self.cursory == -1 {
             return;
         }
-        let w = self.screenw;
-        let h = self.screenh;
+        let w = self.text_cols;
+        let h = self.text_rows;
 
         match c {
             b'\r' => {}
@@ -296,13 +297,13 @@ impl Machine {
                 self.vram_mut()[now..w * h].fill(0);
             }
             LOCATE_PREFIX => {
-                self.screen_locatemode = 2;
+                self.locate_pending_bytes = 2;
             }
             KANA_TOGGLE => {
                 self.is_kana_mode = !self.is_kana_mode;
             }
             INSERT_TOGGLE => {
-                self.is_overwrite = !self.is_overwrite;
+                self.is_overwrite_toggle = !self.is_overwrite_toggle;
             }
             _ => {
                 if c < 32 && c != 0 {
@@ -352,18 +353,21 @@ impl Machine {
         }
     }
 
-    /// screen から現在カーソル行の論理行を取得 (Enter 押下時用)
-    pub fn screen_gets(&mut self) -> usize {
+    /// 現在カーソルがある論理行 (折り返しで上へ続く行も遡る) の先頭の
+    /// RAM インデックスを返す (Enter 確定時の行読み取り用)。
+    pub fn screen_line_start(&mut self) -> usize {
         if self.cursory == -1 {
             self.cursory = 0;
             self.cursorx = 0;
         }
-        let w = self.screenw;
+
+        let w = self.text_cols;
         let p = (self.cursory as i64 - 1) * w as i64;
         if p < 0 {
             return OFFSET_RAM_VRAM;
         }
         let mut p = p as usize;
+
         // 上行末尾が直前行のテキスト末尾になるよう 1 行戻す
         // (空白セルの直前に文字が来ている場合のみ)
         let v = self.vram();
@@ -376,6 +380,7 @@ impl Machine {
             }
             p -= 1;
         }
+
         if v[p] != 0 {
             OFFSET_RAM_VRAM + p
         } else {
@@ -392,18 +397,21 @@ impl Machine {
         if self.cursory < 0 {
             return;
         }
-        let w = self.screenw;
-        let h = self.screenh;
+        let w = self.text_cols;
+        let h = self.text_rows;
+
         // 直前行の末尾セルが埋まっている = 折り返し継続なので行頭まで遡る。
         let mut top = self.cursory as usize;
         while top > 0 && self.vram()[top * w - 1] != 0 {
             top -= 1;
         }
+
         // 自行の末尾セルが埋まっている間は折り返しが続くので下へ伸ばす。
         let mut bottom = top;
         while bottom + 1 < h && self.vram()[(bottom + 1) * w - 1] != 0 {
             bottom += 1;
         }
+
         self.vram_mut()[top * w..(bottom + 1) * w].fill(0);
         self.cursorx = 0;
         self.cursory = top as i32;
@@ -412,8 +420,8 @@ impl Machine {
     // ---- ピクセル描画 (DRAW / POINT) ----
 
     pub fn screen_pset(&mut self, x: i32, y: i32, cmd: i32) -> u32 {
-        let w = self.screenw as i32;
-        let h = self.screenh as i32;
+        let w = self.text_cols as i32;
+        let h = self.text_rows as i32;
         if x < 0 || x >= w * 2 || y < 0 || y >= h * 2 {
             return 0;
         }

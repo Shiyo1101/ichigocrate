@@ -60,7 +60,7 @@ fn inkey_in_running_program() {
     let _ = exec_line(&mut m, "20 IF K=0 GOTO 10");
     let _ = exec_line(&mut m, "30 ?K");
     let _ = exec_line(&mut m, "40 END");
-    let _ = exec_line(&mut m, "RUN"); // keybuf をクリアし LIST へ移行
+    let _ = exec_line(&mut m, "RUN"); // inkey_queue をクリアし LIST へ移行
     // キー未入力の間は 10-20 をループ。数ステップ空回しする。
     for _ in 0..50 {
         m.wait_frames = 0;
@@ -127,12 +127,12 @@ fn save_load_roundtrip() {
     m.set_storage(Box::new(MemStore { data: vec![], has: false }));
     let _ = exec_line(&mut m, "10 ?\"HELLO\"");
     let _ = exec_line(&mut m, "20 ?\"WORLD\"");
-    let original_size = m.listsize;
+    let original_size = m.list_size;
     let _ = exec_line(&mut m, "SAVE 0");
     let _ = exec_line(&mut m, "NEW");
-    assert_eq!(m.listsize, 0);
+    assert_eq!(m.list_size, 0);
     let _ = exec_line(&mut m, "LOAD 0");
-    assert_eq!(m.listsize, original_size);
+    assert_eq!(m.list_size, original_size);
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
     let t = screen_text(&m);

@@ -82,7 +82,7 @@ pub fn run_to_completion(machine: &mut Machine) {
         if machine.basic_step().is_some() {
             break;
         }
-        if machine.stop_execute() {
+        if machine.is_break_requested() {
             break;
         }
     }

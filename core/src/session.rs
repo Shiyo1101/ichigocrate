@@ -174,7 +174,7 @@ impl Session {
         err
     }
 
-    /// Enter キー 1 押下ぶんの処理。実行中は keybuf (INKEY/INPUT) へ、INPUT
+    /// Enter キー 1 押下ぶんの処理。実行中は inkey_queue (INKEY/INPUT) へ、INPUT
     /// 待ち中は値確定、REPL 中は現在行の実行。即時実行がエラーで止まった
     /// ときはその理由を返す。
     pub fn on_enter(&mut self) -> Option<BasicError> {
@@ -199,7 +199,7 @@ impl Session {
         }
     }
 
-    /// 解決済みの 1 文字をモード適応で流す。実行中は keybuf (INKEY/INPUT) へ、
+    /// 解決済みの 1 文字をモード適応で流す。実行中は inkey_queue (INKEY/INPUT) へ、
     /// 停止中は REPL 行編集へ振り分ける。改行は [`Self::on_enter`] と同じ扱い。
     pub fn feed_char(&mut self, c: u8) -> Option<BasicError> {
         self.sync_before_input();
@@ -272,7 +272,8 @@ impl Session {
     fn execute_current_line(&mut self) -> Option<BasicError> {
         // Enter の改行を VRAM へ書き込んでから行を読む。
         self.machine.screen_putc(b'\n');
-        let p = self.machine.screen_gets();
+        let p = self.machine.screen_line_start();
+
         // VRAM から行長を測り生バイトのスライスを得る (String 経由は 0x80-0xFF
         // のグラフィック文字を UTF-8 に展開してしまうため不可)。
         let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
@@ -283,6 +284,7 @@ impl Session {
         if len == 0 {
             return None;
         }
+
         self.machine.is_esc_pressed = false;
         // Machine 借用のため一旦スライスをローカルにコピー。
         let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
@@ -366,6 +368,7 @@ impl Session {
     /// INPUT の入力確定。プロンプト直後から行末までの VRAM を値テキストとして
     /// 読み取り、変数へ反映して実行を再開する。
     fn complete_input(&mut self) {
+        // 値開始位置から行末 (最初の空セル) までを値テキストとして読み取る。
         let (ox, oy) = self.input_origin.take().unwrap_or((0, 0));
         let w = self.machine.screen_cols();
         let start = OFFSET_RAM_VRAM + ox.max(0) as usize + oy.max(0) as usize * w;
@@ -375,6 +378,7 @@ impl Session {
             .position(|&b| b == 0)
             .unwrap_or(vram_end - start);
         let line: Vec<u8> = self.machine.ram[start..start + len].to_vec();
+
         self.machine.input_complete(&line);
         // pc は INPUT 文の直後を指すので、実行を再開する。
         self.is_running = true;

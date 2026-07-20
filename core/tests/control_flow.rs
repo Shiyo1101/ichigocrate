@@ -73,7 +73,7 @@ fn end_resets_pc() {
 }
 
 /// CONT: ESC ブレーク後、停止行から再開する。
-/// STOP/END は `pcbreak` も NULL にするため CONT で再開できないのが仕様。
+/// STOP/END は `break_resume_pc` も NULL にするため CONT で再開できないのが仕様。
 /// CONT が効くのは「ESC でブレークしたとき」だけ。
 #[test]
 fn cont_resumes_from_esc_break() {
@@ -95,7 +95,7 @@ fn cont_resumes_from_esc_break() {
         }
     }
     m.is_esc_pressed = false;
-    // ESC ブレーク後は pcbreak に位置が記録され、CONT で再開できる。
+    // ESC ブレーク後は break_resume_pc に位置が記録され、CONT で再開できる。
     // ループ条件 A<100 が成立する限り 10→20 を繰り返し、最後に 30 で DONE。
     let _ = exec_line(&mut m, "CONT");
     run_to_completion(&mut m);
@@ -105,7 +105,7 @@ fn cont_resumes_from_esc_break() {
     );
 }
 
-/// STOP は pc・pcbreak をともに NULL に戻すため、その後の CONT は
+/// STOP は pc・break_resume_pc をともに NULL に戻すため、その後の CONT は
 /// 無効化される。
 #[test]
 fn stop_disables_subsequent_cont() {
@@ -117,6 +117,6 @@ fn stop_disables_subsequent_cont() {
     assert_eq!(m.pc, PC_NULL);
     let _ = exec_line(&mut m, "CONT");
     run_to_completion(&mut m);
-    // STOP は pcbreak=NULL にするので CONT しても 20 行へは進まない
+    // STOP は break_resume_pc=NULL にするので CONT しても 20 行へは進まない
     assert!(!screen_text(&m).contains("AFTER"));
 }

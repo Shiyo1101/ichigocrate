@@ -27,12 +27,12 @@ impl Machine {
     /// 式を 1 つ評価して値を返す、外部からの入口。最下段 (論理 OR) から評価する。
     pub fn eval_expression(&mut self) -> BResult<i16> {
         self.is_expr_mode = true;
-        self.lasttokenpc = 0;
+        self.last_token_end_pc = 0;
         // is_expr_mode は途中でエラーになっても必ず false へ戻す必要があるため、
         // 本体を内部関数に分け、成否に関わらず後始末する。
         let result = self.eval_logical_or();
         self.is_expr_mode = false;
-        self.lasttokenpc = 0;
+        self.last_token_end_pc = 0;
         result
     }
 
@@ -204,9 +204,9 @@ impl Machine {
                 Ok(match n {
                     1 => self.cursorx as i16,
                     2 => self.cursory as i16,
-                    3 => self.screenw as i16,
-                    4 => self.screenh as i16,
-                    _ => (self.cursorx + self.cursory * self.screenw as i32) as i16,
+                    3 => self.text_cols as i16,
+                    4 => self.text_rows as i16,
+                    _ => (self.cursorx + self.cursory * self.text_cols as i32) as i16,
                 })
             }
             TOKEN_SOUND => {
@@ -217,7 +217,7 @@ impl Machine {
                 self.eval_optional_arg()?;
                 Ok(0)
             }
-            TOKEN_FREE => Ok(((IJB_SIZEOF_LIST as u16) - 2 - self.listsize) as i16),
+            TOKEN_FREE => Ok(((IJB_SIZEOF_LIST as u16) - 2 - self.list_size) as i16),
             TOKEN_VER => {
                 let n = self.eval_optional_arg()?;
                 Ok(match n {
@@ -250,11 +250,11 @@ impl Machine {
             }
             TOKEN_TICK => {
                 let n = self.eval_optional_arg()?;
-                Ok(self.video_tick(n))
+                Ok(self.tick_count(n))
             }
-            TOKEN_FILE => Ok(self.lastfile as i16),
+            TOKEN_FILE => Ok(self.last_file_slot as i16),
             TOKEN_LINE => {
-                let pc2 = if self.pc_in_list() { self.pc } else { self.pcbreak };
+                let pc2 = if self.pc_in_list() { self.pc } else { self.break_resume_pc };
                 if (OFFSET_RAM_LIST..OFFSET_RAM_LIST + SIZE_RAM_LIST).contains(&pc2) {
                     let mut index: u16 = 0;
                     loop {
