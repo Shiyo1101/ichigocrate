@@ -50,7 +50,6 @@ impl Machine {
         self.psg_remaining_frames =
             (len as u32) * (PSG_TICK_FREQ / PSG_TICK_PER_SEC) * ratio;
         self.psg_tone = (tone as u32 * ratio) as u16;
-        self.psgwaitcnt = self.psg_tone.saturating_sub(1);
         self.psg_mml_pos = None;
         // tone 値を Hz に変換 (簡易: 8000 / tone を擬似的に)
         self.current_tone_hz = if tone > 0 {
