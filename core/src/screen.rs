@@ -72,6 +72,7 @@ impl Machine {
         self.video_line_count = 0;
     }
 
+    /// TICK(n) の現在値を返す (n=0: フレームカウンタ, n≠0: 行カウンタ)。
     pub fn tick_count(&self, n: i16) -> i16 {
         let v = if n != 0 { self.video_line_count } else { self.frames };
         (v & 0x7fff) as i16
@@ -352,7 +353,8 @@ impl Machine {
         }
     }
 
-    /// screen から現在カーソル行の論理行を取得 (Enter 押下時用)
+    /// 現在カーソルがある論理行 (折り返しで上へ続く行も遡る) の先頭の
+    /// RAM インデックスを返す (Enter 確定時の行読み取り用)。
     pub fn screen_line_start(&mut self) -> usize {
         if self.cursory == -1 {
             self.cursory = 0;

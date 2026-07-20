@@ -927,8 +927,8 @@ impl Machine {
     ) -> BResult<()> {
         // トークナイザ状態を退避 (token_get は self.pc / last_token_start_pc 等を進めるため)
         let saved_pc = self.pc;
-        let saved_lasttoken = self.last_token_start_pc;
-        let saved_lasttokenpc = self.last_token_end_pc;
+        let saved_token_start_pc = self.last_token_start_pc;
+        let saved_token_end_pc = self.last_token_end_pc;
         let saved_bk = self.last_token;
         let saved_expr_mode = self.is_expr_mode;
 
@@ -973,8 +973,8 @@ impl Machine {
 
         // トークナイザ状態を復元
         self.pc = saved_pc;
-        self.last_token_start_pc = saved_lasttoken;
-        self.last_token_end_pc = saved_lasttokenpc;
+        self.last_token_start_pc = saved_token_start_pc;
+        self.last_token_end_pc = saved_token_end_pc;
         self.last_token = saved_bk;
         self.is_expr_mode = saved_expr_mode;
         result

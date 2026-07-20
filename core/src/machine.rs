@@ -138,16 +138,23 @@ pub struct Machine {
     pub(crate) input_pending: Option<usize>,
 
     pub(crate) psg_octave: u8,
+    /// デフォルト音長 (32 分音符いくつ分か。MML `L` で変更)
     pub(crate) psg_default_note_len: u8,
+    /// BEEP・音長計算のスケール係数 (最小 1 として扱う)
     pub(crate) psg_tick_ratio: u8,
+    /// 非ゼロなら発音中 (BEEP は音長由来の値、MML は 1 をマークに使う)
     pub(crate) psg_tone: u16,
     pub(crate) psg_tempo_bpm: u16,
+    /// 現在の音・休符の残りフレーム数 (0 で次のノートへ進む)
     pub(crate) psg_remaining_frames: u32,
     /// MML 文字列の RAM インデックス (None = 演奏終了)
     pub(crate) psg_mml_pos: Option<usize>,
+    /// MML `$` のリピート開始位置
     pub(crate) psg_repeat_pos: Option<usize>,
 
+    /// TICK(1) が返す行カウンタ。本移植には映像走査が無いため増えず常に 0。
     pub(crate) video_line_count: u16,
+    /// xorshift 乱数の内部状態
     pub(crate) rnd_state: [u32; 4],
 
     /// 最後に SAVE/LOAD した slot 番号 (FILE() で参照)
@@ -666,8 +673,8 @@ impl Machine {
         };
 
         let saved_pc = self.pc;
-        let saved_lasttoken = self.last_token_start_pc;
-        let saved_lasttokenpc = self.last_token_end_pc;
+        let saved_token_start_pc = self.last_token_start_pc;
+        let saved_token_end_pc = self.last_token_end_pc;
         let saved_bk = self.last_token;
         let saved_expr_mode = self.is_expr_mode;
         let saved_linebuf: Vec<u8> =
@@ -689,8 +696,8 @@ impl Machine {
         self.ram[OFFSET_RAM_LINEBUF..OFFSET_RAM_LINEBUF + N_LINEBUF]
             .copy_from_slice(&saved_linebuf);
         self.pc = saved_pc;
-        self.last_token_start_pc = saved_lasttoken;
-        self.last_token_end_pc = saved_lasttokenpc;
+        self.last_token_start_pc = saved_token_start_pc;
+        self.last_token_end_pc = saved_token_end_pc;
         self.last_token = saved_bk;
         self.is_expr_mode = saved_expr_mode;
 
