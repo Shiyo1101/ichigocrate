@@ -58,23 +58,23 @@ impl Machine {
     }
 
     /// VIDEO オン処理。拡大段階に合わせて論理画面サイズを
-    /// `SCREEN_W/H >> screen_big` に再設定する。これにより折り返し位置・
+    /// `SCREEN_W/H >> screen_zoom_shift` に再設定する。これにより折り返し位置・
     /// カーソル可動範囲が拡大倍率へ追従する。
     pub fn video_on(&mut self) {
         self.is_video_enabled = true;
-        self.text_cols = SCREEN_W >> self.screen_big as u32;
-        self.text_rows = SCREEN_H >> self.screen_big as u32;
+        self.text_cols = SCREEN_W >> self.screen_zoom_shift as u32;
+        self.text_rows = SCREEN_H >> self.screen_zoom_shift as u32;
     }
 
-    /// CLT: TICK() が返すフレームカウンタ (`frames`) と行カウンタ (`video_line_count`) を 0 に戻す。
+    /// CLT: TICK() が返すフレームカウンタを 0 に戻す。
     pub fn reset_tick_counters(&mut self) {
         self.frames = 0;
-        self.video_line_count = 0;
     }
 
     /// TICK(n) の現在値を返す (n=0: フレームカウンタ, n≠0: 行カウンタ)。
     pub fn tick_count(&self, n: i16) -> i16 {
-        let v = if n != 0 { self.video_line_count } else { self.frames };
+        // n≠0 の行カウンタは、本移植に映像走査が無く増えないため常に 0。
+        let v = if n != 0 { 0 } else { self.frames };
         (v & 0x7fff) as i16
     }
 

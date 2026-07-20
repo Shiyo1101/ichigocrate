@@ -51,7 +51,7 @@ impl RenderState {
         Self {
             is_inverted: m.is_screen_inverted,
             is_video_enabled: m.is_video_enabled,
-            big: m.screen_big.min(3),
+            big: m.screen_zoom_shift.min(3),
             cursor,
         }
     }

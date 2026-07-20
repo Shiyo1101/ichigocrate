@@ -62,9 +62,9 @@ pub struct Machine {
     pub cursory: i32,
     pub is_cursor_visible: bool,
     pub is_screen_inverted: bool,
-    /// 拡大表示の段階 (VIDEO 3/4 で 1 以上)。表示倍率は `1 << screen_big`。
+    /// 拡大表示の段階 (VIDEO 3/4 で 1 以上)。表示倍率は `1 << screen_zoom_shift`。
     /// 0 = 等倍, 1 = 2 倍, 2 = 4 倍, 3 = 8 倍 (最大 3 でクリップ)。
-    pub screen_big: u8,
+    pub screen_zoom_shift: u8,
     /// 映像出力の有効/無効 (VIDEO 0 でオフ)。ホストはオフ時に黒画面を描画する。
     pub is_video_enabled: bool,
 
@@ -138,22 +138,17 @@ pub struct Machine {
     pub(crate) input_pending: Option<usize>,
 
     pub(crate) psg_octave: u8,
-    /// デフォルト音長 (32 分音符いくつ分か。MML `L` で変更)
-    pub(crate) psg_default_note_len: u8,
-    /// BEEP・音長計算のスケール係数 (最小 1 として扱う)
-    pub(crate) psg_tick_ratio: u8,
-    /// 非ゼロなら発音中 (BEEP は音長由来の値、MML は 1 をマークに使う)
-    pub(crate) psg_tone: u16,
+    /// デフォルト音長 (MML `L` で変更)
+    pub(crate) psg_default_note_32nds: u8,
+    pub(crate) is_tone_active: bool,
     pub(crate) psg_tempo_bpm: u16,
     /// 現在の音・休符の残りフレーム数 (0 で次のノートへ進む)
     pub(crate) psg_remaining_frames: u32,
     /// MML 文字列の RAM インデックス (None = 演奏終了)
     pub(crate) psg_mml_pos: Option<usize>,
     /// MML `$` のリピート開始位置
-    pub(crate) psg_repeat_pos: Option<usize>,
+    pub(crate) psg_mml_repeat_pos: Option<usize>,
 
-    /// TICK(1) が返す行カウンタ。本移植には映像走査が無いため増えず常に 0。
-    pub(crate) video_line_count: u16,
     /// xorshift 乱数の内部状態
     pub(crate) rnd_state: [u32; 4],
 
@@ -212,7 +207,7 @@ impl Machine {
             is_overwrite_mode: true,
             locate_pending_bytes: 0,
             is_screen_inverted: false,
-            screen_big: 0,
+            screen_zoom_shift: 0,
             is_video_enabled: true,
 
             is_overwrite_toggle: false,
@@ -228,16 +223,14 @@ impl Machine {
             input_pending: None,
 
             psg_octave: 3,
-            psg_default_note_len: 8,
-            psg_tick_ratio: 1,
-            psg_tone: 0,
+            psg_default_note_32nds: 8,
+            is_tone_active: false,
             psg_tempo_bpm: 120,
             psg_remaining_frames: 0,
             psg_mml_pos: None,
-            psg_repeat_pos: None,
+            psg_mml_repeat_pos: None,
 
             frames: 0,
-            video_line_count: 0,
             rnd_state: [123456789, 362436069, 521288629, 88675123],
 
             is_led_on: false,
