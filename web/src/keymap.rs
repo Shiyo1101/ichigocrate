@@ -11,7 +11,8 @@ use ichigocrate_core::keycodes as kc;
 ///
 /// `"Backslash"` だけ keyboard_id で Usage ID を出し分ける: W3C UI Events
 /// Code の仕様上、US の `\` (0x31) と JIS の `]` (0x32) は同じ `"Backslash"`
-/// として報告され区別できないため。
+/// として報告され区別できないため。`"IntlYen"` (JIS 配列の ¥/| キー) は
+/// layout に関わらず 0x31 固定 (0x31 の shift 列は US/JA 共通で `|`)。
 pub(crate) fn code_to_hid(code: &str, keyboard_id: u8) -> Option<u8> {
     Some(match code {
         "KeyA" => 0x04,
@@ -66,6 +67,7 @@ pub(crate) fn code_to_hid(code: &str, keyboard_id: u8) -> Option<u8> {
                 0x32
             }
         }
+        "IntlYen" => 0x31,
         "Semicolon" => 0x33,
         "Quote" => 0x34,
         "Backquote" => 0x35,
@@ -137,6 +139,15 @@ mod tests {
         // 報告するため、KBD で選んだ keyboard_id 側で出し分ける。
         assert_eq!(code_to_hid("Backslash", 0), Some(0x31));
         assert_eq!(code_to_hid("Backslash", 1), Some(0x32));
+    }
+
+    #[test]
+    fn code_to_hid_intl_yen_is_layout_independent() {
+        // "IntlYen" は JIS 配列の ¥/| キー専用の物理コードで、US 配列の
+        // キーボードからは送出されない。Backslash と混同すると JIS 実機で
+        // Shift+¥/| が `}` になってしまうため、0x31 固定で区別する。
+        assert_eq!(code_to_hid("IntlYen", 0), Some(0x31));
+        assert_eq!(code_to_hid("IntlYen", 1), Some(0x31));
     }
 
     #[test]
