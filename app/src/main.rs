@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
 /// アイドル時 (REPL 待機) の再描画間隔。この状態で変化しうるのはカーソル
-/// 点滅 (約 333ms 周期) だけなので、60Hz ではなくこの低頻度で再描画を
-/// 要求し、待機中の CPU/GPU 消費を抑える。
-const IDLE_REPAINT: Duration = Duration::from_millis(333);
+/// 点滅だけなので、60Hz ではなく点滅の切替間隔で再描画を要求し、待機中の
+/// CPU/GPU 消費を抑える。
+const IDLE_REPAINT: Duration = Duration::from_millis(CURSOR_BLINK_MS as u64);
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use eframe::{egui, App, CreationContext};
@@ -26,8 +26,9 @@ use egui::{Color32, ColorImage, Key, TextureHandle, TextureOptions, Vec2};
 
 use ichigocrate_core::{
     keycodes as kc,
-    machine::Storage,
-    render::{render_mono, RenderState, IMG_H, IMG_W},
+    keymap::{backslash_key_hid, HID_BACKSLASH},
+    machine::{copy_slot_data, Storage},
+    render::{cursor_blink_phase, render_mono, RenderState, CURSOR_BLINK_MS, IMG_H, IMG_W},
     session::Session,
     Machine,
 };
@@ -46,7 +47,6 @@ const FKEYS: [Key; 9] = [
     Key::F8,
     Key::F9,
 ];
-
 
 fn main() -> eframe::Result<()> {
     // macOS の Input Method Kit が出す
@@ -90,8 +90,12 @@ fn filter_macos_stderr() {
     use std::io::{BufRead, BufReader, Write};
 
     // 真の stderr 書込みハンドルを保存 (fd 2 はパイプ側に張替える)
-    let Ok(mut real_stderr) = os_pipe::dup_stderr() else { return };
-    let Ok((reader, writer)) = os_pipe::pipe() else { return };
+    let Ok(mut real_stderr) = os_pipe::dup_stderr() else {
+        return;
+    };
+    let Ok((reader, writer)) = os_pipe::pipe() else {
+        return;
+    };
     if rustix::stdio::dup2_stderr(&writer).is_err() {
         return;
     }
@@ -117,7 +121,6 @@ fn filter_macos_stderr() {}
 #[derive(Debug)]
 struct DiskStorage {
     dir: PathBuf,
-    slot_count: u8,
 }
 
 impl DiskStorage {
@@ -127,7 +130,7 @@ impl DiskStorage {
             .join(".ichigocrate");
         let _ = std::fs::create_dir_all(&dir);
         eprintln!("[ichigocrate] file storage: {}", dir.display());
-        Self { dir, slot_count: 16 }
+        Self { dir }
     }
 
     fn path(&self, slot: u8) -> PathBuf {
@@ -142,19 +145,7 @@ impl Storage for DiskStorage {
 
     fn load(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
         let bytes = std::fs::read(self.path(slot)).ok()?;
-        let n = bytes.len().min(buf.len());
-        buf[..n].copy_from_slice(&bytes[..n]);
-        // 残りはゼロ埋め (リストの終端を保証)
-        buf[n..].fill(0);
-        Some(n)
-    }
-
-    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
-        self.load(slot, buf)
-    }
-
-    fn slot_count(&self) -> u8 {
-        self.slot_count
+        Some(copy_slot_data(&bytes, buf))
     }
 }
 
@@ -208,8 +199,8 @@ impl App for IchigoApp {
 
         // 60Hz tick・WAIT 期限・実行中プログラムの継続はすべて Session が担う。
         // エラーは VRAM に表示済みなのでネイティブ版では戻り値を使わない。
-        let now_ms = (now - self.start_time).as_secs_f64() * 1000.0;
-        let _ = self.session.tick(now_ms);
+        let elapsed_ms = (now - self.start_time).as_secs_f64() * 1000.0;
+        let _ = self.session.tick(elapsed_ms);
 
         self.shared_tone
             .store(self.session.machine.current_tone_hz, Ordering::Relaxed);
@@ -234,10 +225,8 @@ impl App for IchigoApp {
             self.was_kana_mode = self.session.machine.is_kana_mode;
         }
 
-        // カーソル点滅は実時間 (~333ms 周期) で算出 (リフレッシュ非依存)
-        let cursor_blink_phase =
-            ((now - self.start_time).as_millis() / 333) as u32;
-        self.renderer.sync(ctx, &self.session.machine, cursor_blink_phase);
+        self.renderer
+            .sync(ctx, &self.session.machine, cursor_blink_phase(elapsed_ms));
 
         // 実機 LED の代替: LED 1 で赤い枠、LED 0 で透明
         let border_color = if self.session.machine.is_led_on {
@@ -250,20 +239,14 @@ impl App for IchigoApp {
             .frame(egui::Frame::default().fill(Color32::BLACK))
             .show(ctx, |ui| {
                 if let Some(tex) = &self.renderer.texture {
-                    let size = Vec2::new(
-                        (IMG_W * PIXEL_SCALE) as f32,
-                        (IMG_H * PIXEL_SCALE) as f32,
-                    );
+                    let size =
+                        Vec2::new((IMG_W * PIXEL_SCALE) as f32, (IMG_H * PIXEL_SCALE) as f32);
                     ui.centered_and_justified(|ui| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(size, egui::Sense::hover());
+                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                         ui.painter().image(
                             tex.id(),
                             rect,
-                            egui::Rect::from_min_max(
-                                egui::pos2(0.0, 0.0),
-                                egui::pos2(1.0, 1.0),
-                            ),
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                             Color32::WHITE,
                         );
                         ui.painter().rect_stroke(
@@ -329,7 +312,11 @@ impl Renderer {
 
         render_mono(&mut self.mono, machine, &state);
         for (dst, &on) in self.pixels.iter_mut().zip(self.mono.iter()) {
-            *dst = if on != 0 { Color32::WHITE } else { Color32::BLACK };
+            *dst = if on != 0 {
+                Color32::WHITE
+            } else {
+                Color32::BLACK
+            };
         }
 
         // スナップショット更新 (確保は初回のみ、以降は容量を再利用)。
@@ -385,20 +372,9 @@ fn process_keyboard(ctx: &egui::Context, session: &mut Session) {
                 let Some(hid) = egui_key_to_hid(phys, session.machine.keyboard_id()) else {
                     continue;
                 };
-                let mut c = session
-                    .machine
-                    .keymap_lookup(hid, modifiers.shift, modifiers.alt);
-                if c == 0 {
-                    continue;
-                }
-                // IchigoJam 慣習: 英字は常に大文字 (CAPS デフォルト ON)。
-                // keymap の col0 (lowercase) を引いた場合のみ補正する。
-                if c.is_ascii_lowercase() {
-                    c -= b'a' - b'A';
-                }
                 // 実行中は inkey_queue (INKEY/INPUT) へ、停止中は REPL 行編集へ。
                 // 振り分けは Session が担う。
-                let _ = session.feed_char(c);
+                let _ = session.feed_key(hid, modifiers.shift, modifiers.alt);
             }
         }
         // ウィンドウがフォーカスを失っている間は解放イベントを取りこぼし、
@@ -443,12 +419,10 @@ fn is_host_reserved_key(k: Key) -> bool {
 /// `[` キー = 0x2f)。physical_key を引いて KBD コマンドの US/JA 切替を
 /// OS レイアウトに依らず効かせるための入り口。
 ///
-/// `Key::Backslash` だけ keyboard_id で Usage ID を出し分ける: winit は
-/// US の `\` (0x31) と JIS の `]` (0x32) を同じ物理キーとして区別しない
-/// ため (winit::KeyCode::Backslash の doc 参照)。`Key::Pipe` は含めない:
-/// egui-winit は `KeyCode::IntlYen` (¥/| キー) を physical_key に変換
-/// できず論理キーへフォールバックするため、layout に関わらず 0x31 固定
-/// (0x31 の shift 列は US/JA 共通で `|`)。
+/// `Key::Backslash` は US の `\` と JIS の `]` を区別できないので配列で出し分ける
+/// ([`backslash_key_hid`] 参照)。`Key::Pipe` は egui-winit が `KeyCode::IntlYen`
+/// (¥/| キー) を physical_key に変換できず論理キーへフォールバックしたときに
+/// だけ現れるので、配列に関わらず固定する。
 fn egui_key_to_hid(k: Key, keyboard_id: u8) -> Option<u8> {
     Some(match k {
         // 英字: A=0x04 … Z=0x1d
@@ -498,14 +472,8 @@ fn egui_key_to_hid(k: Key, keyboard_id: u8) -> Option<u8> {
         Key::Equals | Key::Plus => 0x2e,
         Key::OpenBracket => 0x2f,
         Key::CloseBracket => 0x30,
-        Key::Backslash => {
-            if keyboard_id == 0 {
-                0x31
-            } else {
-                0x32
-            }
-        }
-        Key::Pipe => 0x31,
+        Key::Backslash => backslash_key_hid(keyboard_id),
+        Key::Pipe => HID_BACKSLASH,
         Key::Semicolon | Key::Colon => 0x33,
         Key::Quote => 0x34,
         Key::Backtick => 0x35,
@@ -542,9 +510,7 @@ fn key_to_btn_code(k: Key) -> Option<u8> {
             // 英字 A-Z / 数字 0-9 は Key::name() が 1 文字を返すのでその
             // ASCII をそのままコードにする (例: X キー → 'X' == 88)。
             let bytes = k.name().as_bytes();
-            if bytes.len() == 1
-                && (bytes[0].is_ascii_uppercase() || bytes[0].is_ascii_digit())
-            {
+            if bytes.len() == 1 && (bytes[0].is_ascii_uppercase() || bytes[0].is_ascii_digit()) {
                 bytes[0]
             } else {
                 return None;
@@ -555,9 +521,7 @@ fn key_to_btn_code(k: Key) -> Option<u8> {
 
 fn start_audio(tone: Arc<AtomicF32>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or("no output device")?;
+    let device = host.default_output_device().ok_or("no output device")?;
     let config = device.default_output_config().map_err(|e| e.to_string())?;
     let sample_rate = config.sample_rate().0 as f32;
     let channels = config.channels() as usize;

@@ -3,10 +3,7 @@
 use std::collections::HashMap;
 
 use base64::Engine;
-use ichigocrate_core::machine::Storage;
-
-/// 提供するセーブスロット数 (実機 IchigoJam 準拠)。
-const SLOT_COUNT: u8 = 16;
+use ichigocrate_core::machine::{copy_slot_data, Storage};
 
 /// `persist=true` は localStorage、false はセッション内のみの揮発メモリへ保存する。
 /// `prefix` で複数インスタンスのスロットを分離する。localStorage が使えない
@@ -58,19 +55,7 @@ impl Storage for WebStorage {
         } else {
             self.mem.get(&slot)?.clone()
         };
-        let n = data.len().min(buf.len());
-        buf[..n].copy_from_slice(&data[..n]);
-        // 残りはゼロ埋め (リスト終端を保証)。
-        buf[n..].fill(0);
-        Some(n)
-    }
-
-    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
-        self.load(slot, buf)
-    }
-
-    fn slot_count(&self) -> u8 {
-        SLOT_COUNT
+        Some(copy_slot_data(&data, buf))
     }
 }
 

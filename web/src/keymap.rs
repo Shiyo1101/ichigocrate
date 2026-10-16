@@ -3,16 +3,17 @@
 //! 物理キー位置 (`KeyboardEvent.code`) で keymap を引くことで、`KBD` コマンドの
 //! US/JA 切替が OS の入力レイアウトに依らず効くようにする入り口。
 
-use ichigocrate_core::keycodes as kc;
+use ichigocrate_core::{
+    keycodes as kc,
+    keymap::{backslash_key_hid, HID_BACKSLASH},
+};
 
 /// `KeyboardEvent.code` を USB HID Keyboard Usage ID へ変換する。
 /// 添字は HID Usage ID に一致させ (例: Digit2=0x1f、BracketLeft=0x2f)、
 /// 物理キー位置で keymap を引いて KBD の US/JA 切替を OS 非依存にする入り口。
 ///
-/// `"Backslash"` だけ keyboard_id で Usage ID を出し分ける: W3C UI Events
-/// Code の仕様上、US の `\` (0x31) と JIS の `]` (0x32) は同じ `"Backslash"`
-/// として報告され区別できないため。`"IntlYen"` (JIS 配列の ¥/| キー) は
-/// layout に関わらず 0x31 固定 (0x31 の shift 列は US/JA 共通で `|`)。
+/// `"Backslash"` は US の `\` と JIS の `]` を区別できないので配列で出し分け、
+/// `"IntlYen"` (JIS の ¥/| キー) は配列に関わらず固定 ([`backslash_key_hid`] 参照)。
 pub(crate) fn code_to_hid(code: &str, keyboard_id: u8) -> Option<u8> {
     Some(match code {
         "KeyA" => 0x04,
@@ -60,14 +61,8 @@ pub(crate) fn code_to_hid(code: &str, keyboard_id: u8) -> Option<u8> {
         "Equal" => 0x2e,
         "BracketLeft" => 0x2f,
         "BracketRight" => 0x30,
-        "Backslash" => {
-            if keyboard_id == 0 {
-                0x31
-            } else {
-                0x32
-            }
-        }
-        "IntlYen" => 0x31,
+        "Backslash" => backslash_key_hid(keyboard_id),
+        "IntlYen" => HID_BACKSLASH,
         "Semicolon" => 0x33,
         "Quote" => 0x34,
         "Backquote" => 0x35,
@@ -99,21 +94,11 @@ pub(crate) fn code_to_btn_code(code: &str) -> Option<u8> {
         "ArrowUp" => kc::CURSOR_UP,
         "ArrowDown" => kc::CURSOR_DOWN,
         "Space" => kc::SPACE,
-        _ => {
-            if let Some(letter) = code.strip_prefix("Key") {
-                let b = letter.as_bytes();
-                if b.len() == 1 && b[0].is_ascii_uppercase() {
-                    return Some(b[0]);
-                }
-            }
-            if let Some(digit) = code.strip_prefix("Digit") {
-                let b = digit.as_bytes();
-                if b.len() == 1 && b[0].is_ascii_digit() {
-                    return Some(b[0]);
-                }
-            }
-            return None;
-        }
+        _ => match code.as_bytes() {
+            [b'K', b'e', b'y', c @ b'A'..=b'Z']
+            | [b'D', b'i', b'g', b'i', b't', c @ b'0'..=b'9'] => *c,
+            _ => return None,
+        },
     })
 }
 
