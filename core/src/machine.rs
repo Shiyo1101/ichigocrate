@@ -88,7 +88,6 @@ pub struct Machine {
     pub wait_frames: u32,
 
     // ---- 以下はクレート内専用 (`pub(crate)`) ----
-
     /// `token_back` 用に直前のトークン取得開始位置を覚える
     pub(crate) last_token_start_pc: usize,
     pub(crate) last_token_end_pc: usize,
@@ -169,11 +168,27 @@ pub trait Storage: std::fmt::Debug {
     /// `None` の場合の `buf` の中身は不定。
     fn load(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize>;
     /// FILES 用: スロット先頭バイトの覗き見。意味は [`Storage::load`] と同じ。
-    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize>;
+    /// 先頭だけを安く読める実装がなければ全体読み込みで代用する。
+    fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
+        self.load(slot, buf)
+    }
     /// 利用可能なスロット数 (FILES デフォルト範囲)。
     fn slot_count(&self) -> u8 {
-        16
+        DEFAULT_SLOT_COUNT
     }
+}
+
+/// 実機 IchigoJam と同じセーブスロット数。
+pub const DEFAULT_SLOT_COUNT: u8 = 16;
+
+/// 保存データを `buf` へ詰めて読み込んだバイト数を返す [`Storage::load`] 実装用ヘルパ。
+/// 残りをゼロ埋めするのは、短いプログラムを読んだ後に前のリストの残骸が
+/// 終端の後ろに残らないようにするため。
+pub fn copy_slot_data(data: &[u8], buf: &mut [u8]) -> usize {
+    let n = data.len().min(buf.len());
+    buf[..n].copy_from_slice(&data[..n]);
+    buf[n..].fill(0);
+    n
 }
 
 impl Default for Machine {

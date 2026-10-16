@@ -219,6 +219,25 @@ const fn build_ja() -> [[u8; 4]; 128] {
 pub const KEYMAP_US: [[u8; 4]; 128] = build_us();
 pub const KEYMAP_JA: [[u8; 4]; 128] = build_ja();
 
+/// US 配列の `\` キー (HID "Keyboard \ and |")。
+pub const HID_BACKSLASH: u8 = 0x31;
+/// JIS 配列の `]` キー (HID "Keyboard Non-US # and ~")。
+pub const HID_NON_US_HASH: u8 = 0x32;
+
+/// ホストが「Backslash」とだけ報告する物理キーの HID Usage ID を、KBD で選ばれた
+/// 配列から決める。
+///
+/// ブラウザ (`KeyboardEvent.code`) も winit も、US の `\` と JIS の `]` を同じ
+/// 物理キーとして報告し区別できないため。JIS の ¥/| キーは別コードで届くので
+/// 配列に関わらず [`HID_BACKSLASH`] を使う (この位置の Shift 列は US/JA 共通で `|`)。
+pub fn backslash_key_hid(keyboard_id: u8) -> u8 {
+    if keyboard_id == 0 {
+        HID_BACKSLASH
+    } else {
+        HID_NON_US_HASH
+    }
+}
+
 /// HID キーコード + 修飾キー → IchigoJam 内部コード。
 /// `keyboard_id` 0 = US、それ以外 = JA (`KBD` コマンドの `!!n` 正規化と一致)。
 /// 0 はそのキーに対する出力が割り当てられていないことを表す。
@@ -226,7 +245,11 @@ pub fn lookup(keyboard_id: u8, hid: u8, shift: bool, alt: bool) -> u8 {
     if hid as usize >= 128 {
         return 0;
     }
-    let table = if keyboard_id == 0 { &KEYMAP_US } else { &KEYMAP_JA };
+    let table = if keyboard_id == 0 {
+        &KEYMAP_US
+    } else {
+        &KEYMAP_JA
+    };
     let col = (alt as usize) * 2 + (shift as usize);
     table[hid as usize][col]
 }

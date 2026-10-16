@@ -17,6 +17,14 @@ pub const FONT_H: usize = 8;
 pub const IMG_W: usize = SCREEN_W * FONT_W;
 /// 画面ビットマップの高さ。
 pub const IMG_H: usize = SCREEN_H * FONT_H;
+/// カーソル点滅の半周期 (ms)。点灯と消灯をこの間隔で交互に切り替える。
+pub const CURSOR_BLINK_MS: f64 = 333.0;
+
+/// 起動からの経過 ms を [`RenderState::capture`] へ渡す点滅位相へ変換する。
+/// 実時間から求めるので、表示のリフレッシュレートに依らず同じ周期で点滅する。
+pub fn cursor_blink_phase(elapsed_ms: f64) -> u32 {
+    (elapsed_ms / CURSOR_BLINK_MS) as u32
+}
 
 /// 描画結果に影響する VRAM/PCG 以外の状態。フロント側の dirty 判定にも使う。
 #[derive(Clone, PartialEq, Eq)]
@@ -44,7 +52,10 @@ impl RenderState {
             && (m.cursorx as usize) < cols;
         let cursor = if show && in_range {
             // 上書きモードは文字全体、挿入モードは左半分のみ反転 (実機準拠)。
-            Some((m.cursory as usize * cols + m.cursorx as usize, m.cursor_full_width()))
+            Some((
+                m.cursory as usize * cols + m.cursorx as usize,
+                m.cursor_full_width(),
+            ))
         } else {
             None
         };
