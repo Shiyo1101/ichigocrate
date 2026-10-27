@@ -43,20 +43,13 @@ core/
 - VIDEO — 拡大時は `screen_cols()` / `screen_rows()` 自体が縮む (`32/24 >> 拡大段階`) ため、ホスト側も折り返しやカーソル範囲の計算にこの値を使う。clkdiv 引数 (実機の省電力用クロック分周) は読み飛ばす
 - KBD — 実機はフラッシュへ保存するが本移植はメモリ内のみ (既定は JA)。`VER(2)` で現在値を返す
 
-### 受け付けるが何もしない
-
-実機の GPIO・アナログ入力・機械語呼び出しに相当するもの。構文としては受け付け、エラーにはしない。
-
-- コマンド: OUT, CLO
-- 関数: IN (常に 0), ANA (常に 0), USR (常に 0)
-
 ### 未実装
 
 実行すると Syntax error になる。
 
-- コマンド: PWM, DAC, UART, BPS, SLEEP, IOT.OUT, WS.LED
-- 関数: ASC, I2CR, I2CW, IOT.IN
-- その他: 多言語フォント (中国語・ベトナム語・モンゴル語)、Morse 拡張
+- コマンド: OUT, CLO, PWM, DAC, UART, BPS, SLEEP, IOT.OUT, WS.LED
+- 関数: IN, ANA, USR, ASC, I2CR, I2CW, IOT.IN
+- その他: Morse 拡張
 
 ## テスト
 
