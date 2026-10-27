@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::screen_text;
+use common::{screen_text, vram_line};
 use ichigocrate_core::{exec_line, run_to_completion, Machine, PC_NULL};
 
 #[test]
@@ -13,10 +13,38 @@ fn for_next_loop() {
     let _ = exec_line(&mut m, "30 NEXT");
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen_text(&m);
-    assert!(t.contains('1'), "{t}");
-    assert!(t.contains('2'), "{t}");
-    assert!(t.contains('3'), "{t}");
+    assert_eq!(vram_line(&m, 0), "1");
+    assert_eq!(vram_line(&m, 1), "2");
+    assert_eq!(vram_line(&m, 2), "3");
+    assert_eq!(vram_line(&m, 3), "", "TO の値で終了し 4 回目は回らない");
+}
+
+/// STEP は正負どちらも指定でき、TO を飛び越えた時点で終了する。
+#[test]
+fn for_next_with_step() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 FOR I=10 TO 1 STEP -3");
+    let _ = exec_line(&mut m, "20 ?I;\" \";");
+    let _ = exec_line(&mut m, "30 NEXT");
+    let _ = exec_line(&mut m, "40 ?");
+    let _ = exec_line(&mut m, "50 FOR I=0 TO 5 STEP 2");
+    let _ = exec_line(&mut m, "60 ?I;\" \";");
+    let _ = exec_line(&mut m, "70 NEXT");
+    let _ = exec_line(&mut m, "RUN");
+    run_to_completion(&mut m);
+    assert_eq!(vram_line(&m, 0), "10 7 4 1 ");
+    assert_eq!(vram_line(&m, 1), "0 2 4 ");
+}
+
+#[test]
+fn nested_for_next() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 FOR I=1 TO 2:FOR J=1 TO 2");
+    let _ = exec_line(&mut m, "20 ?I*10+J;\" \";");
+    let _ = exec_line(&mut m, "30 NEXT:NEXT");
+    let _ = exec_line(&mut m, "RUN");
+    run_to_completion(&mut m);
+    assert_eq!(vram_line(&m, 0), "11 12 21 22 ");
 }
 
 #[test]
@@ -31,6 +59,19 @@ fn goto_and_if() {
     let t = screen_text(&m);
     assert!(t.contains("YES"), "{t}");
     assert!(!t.contains("NO"), "{t}");
+}
+
+/// IF は THEN 省略可。偽なら ELSE 以降、ELSE が無ければ行末まで読み飛ばす。
+#[test]
+fn if_then_else_branches() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "IF 1 THEN ?\"T1\" ELSE ?\"F1\"");
+    let _ = exec_line(&mut m, "IF 0 ?\"T2\" ELSE ?\"F2\"");
+    let _ = exec_line(&mut m, "IF 0 ?\"T3\":?\"SKIPPED\"");
+    let _ = exec_line(&mut m, "?\"NEXT\"");
+    assert_eq!(vram_line(&m, 0), "T1");
+    assert_eq!(vram_line(&m, 1), "F2");
+    assert_eq!(vram_line(&m, 2), "NEXT");
 }
 
 /// `@LABEL` を文として書くと、`:` または行末までコメント扱いになる
