@@ -337,6 +337,37 @@ impl Renderer {
     }
 }
 
+/// egui (0.29) は CapsLock キーの押下も状態も報告しないため、英字キーに対して OS が
+/// 生成した文字 (`Event::Key` の直後の `Event::Text`) から OS の CapsLock 状態を推定する。
+/// Shift なしで英字キーを押して大文字が来れば ON。Shift 併用時は OS によって挙動が
+/// 違う (macOS は CapsLock 中に Shift を押しても小文字にならない) ので判定に使わない。
+/// 判定できるキー入力が無ければ `None`。
+fn os_caps_lock_from_events(events: &[egui::Event]) -> Option<bool> {
+    let mut state = None;
+    for pair in events.windows(2) {
+        let [egui::Event::Key {
+            physical_key: Some(key),
+            pressed: true,
+            modifiers,
+            ..
+        }, egui::Event::Text(text)] = pair
+        else {
+            continue;
+        };
+        if modifiers.shift || modifiers.alt || modifiers.ctrl || modifiers.command {
+            continue;
+        }
+        let is_letter_key = matches!(key.name().as_bytes(), [c] if c.is_ascii_alphabetic());
+        let mut chars = text.chars();
+        if let (true, Some(c), None) = (is_letter_key, chars.next(), chars.next()) {
+            if c.is_ascii_alphabetic() {
+                state = Some(c.is_ascii_uppercase());
+            }
+        }
+    }
+    state
+}
+
 fn process_keyboard(ctx: &egui::Context, session: &mut Session) {
     ctx.input(|i| {
         // F10: ローマ字 → 半角カナ変換のオン/オフ
@@ -344,6 +375,10 @@ fn process_keyboard(ctx: &egui::Context, session: &mut Session) {
         // 切替に予約されているため、両 OS で動く F10 を採用)
         if i.key_pressed(Key::F10) {
             session.machine.toggle_kana();
+        }
+        // egui は CapsLock キーを報告しないので、OS が生成した文字から状態を推定する。
+        if let Some(caps_lock) = os_caps_lock_from_events(&i.events) {
+            session.machine.sync_host_caps_lock(caps_lock);
         }
 
         for ev in &i.events {
@@ -620,6 +655,63 @@ mod tests {
         assert_eq!(lookup(Key::Backslash, 1, true), b'}'); // JA+Shift: }
         assert_eq!(lookup(Key::Pipe, 0, true), b'|'); // US+Shift: |
         assert_eq!(lookup(Key::Pipe, 1, true), b'|'); // JA+Shift でも変わらず |
+    }
+
+    /// 物理キー `key` の押下と、OS が生成した文字 `text` の組。
+    fn key_with_text(key: Key, shift: bool, text: &str) -> [egui::Event; 2] {
+        [
+            egui::Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers {
+                    shift,
+                    ..Default::default()
+                },
+            },
+            egui::Event::Text(text.into()),
+        ]
+    }
+
+    #[test]
+    fn os_caps_lock_inferred_from_unshifted_letter() {
+        assert_eq!(
+            os_caps_lock_from_events(&key_with_text(Key::A, false, "a")),
+            Some(false)
+        );
+        assert_eq!(
+            os_caps_lock_from_events(&key_with_text(Key::A, false, "A")),
+            Some(true)
+        );
+        // 複数あれば最後の入力で判定する
+        let mut events = key_with_text(Key::A, false, "a").to_vec();
+        events.extend(key_with_text(Key::B, false, "B"));
+        assert_eq!(os_caps_lock_from_events(&events), Some(true));
+    }
+
+    #[test]
+    fn os_caps_lock_not_inferred_from_shift_or_non_letters() {
+        // Shift 併用は OS ごとに挙動が違うので判定しない
+        assert_eq!(
+            os_caps_lock_from_events(&key_with_text(Key::A, true, "A")),
+            None
+        );
+        // 英字以外のキー
+        assert_eq!(
+            os_caps_lock_from_events(&key_with_text(Key::Num1, false, "1")),
+            None
+        );
+        // IME などで英字キーから英字以外が来た場合
+        assert_eq!(
+            os_caps_lock_from_events(&key_with_text(Key::A, false, "ア")),
+            None
+        );
+        // 文字を伴わないキー押下
+        assert_eq!(
+            os_caps_lock_from_events(&key_with_text(Key::A, false, "a")[..1]),
+            None
+        );
     }
 
     #[test]
