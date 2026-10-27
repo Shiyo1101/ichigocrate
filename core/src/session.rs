@@ -24,6 +24,10 @@ pub const FRAME_MS: f64 = 1000.0 / 60.0;
 /// 1 フレームで進める最大文数。無限ループのプログラムでも UI を凍結させない。
 const MAX_STEPS_PER_FRAME: usize = 2000;
 
+/// 1 回の tick で追いつく 60Hz tick の上限。これを超えて遅れたら追従を諦め、
+/// バックグラウンド放置からの復帰時に PSG/frames が一気に進むのを防ぐ。
+const MAX_CATCHUP_TICKS: u32 = 8;
+
 /// IchigoJam 標準準拠の F1-F9 コマンド割当。bool は「Enter まで自動実行するか」。
 /// false のものはカーソルを残し、ユーザがスロット番号などを続けて入力できる。
 const FKEY_BINDINGS: [(&str, bool); 9] = [
@@ -86,17 +90,17 @@ pub struct Session {
 
 impl Session {
     /// ストレージ設定済みの `machine` を受け取り、電源 ON 状態で開始する。
-    pub fn new(mut machine: Machine) -> Self {
-        machine.power_on_reset();
-        machine.put_str("OK\n");
-        Self {
+    pub fn new(machine: Machine) -> Self {
+        let mut session = Self {
             machine,
             is_running: false,
             input_origin: None,
             suppress_next_ok: false,
             next_tick_ms: None,
             wait_until_ms: None,
-        }
+        };
+        session.reset();
+        session
     }
 
     /// プログラム実行中か (REPL 待機の対義)。
@@ -137,13 +141,13 @@ impl Session {
         // 60Hz tick を実時間に同期して必要回数進める。大きく遅れたら追いつく
         // のを諦めて基準をリセット (バックグラウンド放置後のバースト防止)。
         let mut iters = 0;
-        while *next <= now_ms && iters < 8 {
+        while *next <= now_ms && iters < MAX_CATCHUP_TICKS {
             self.machine.frames = self.machine.frames.wrapping_add(1);
             self.machine.psg_tick();
             *next += FRAME_MS;
             iters += 1;
         }
-        if *next + FRAME_MS * 8.0 < now_ms {
+        if *next + FRAME_MS * f64::from(MAX_CATCHUP_TICKS) < now_ms {
             *next = now_ms;
         }
 
@@ -224,6 +228,17 @@ impl Session {
         None
     }
 
+    /// 物理キー 1 押下 (HID Usage ID + 修飾キー) を現在の KBD 配列で文字へ解決し、
+    /// [`Self::feed_char`] へ流す。割当の無いキーは無視する。
+    pub fn feed_key(&mut self, hid: u8, shift: bool, alt: bool) -> Option<BasicError> {
+        let c = self.machine.keymap_lookup(hid, shift, alt);
+        if c == 0 {
+            return None;
+        }
+        // IchigoJam は CAPS 既定 ON なので、keymap の小文字列を引いても大文字で入力する。
+        self.feed_char(c.to_ascii_uppercase())
+    }
+
     /// F キー (F1=1 .. F9=9) の割当コマンド投入。REPL 待機中のみ受理し、
     /// 実行中・INPUT 待ち中は何もしない。
     ///
@@ -254,6 +269,23 @@ impl Session {
             return None;
         }
         self.machine.is_program_running = false;
+        self.run_line(line)
+    }
+
+    /// Enter 確定時: カーソル行を生バイト列として取り出し REPL 実行する。
+    fn execute_current_line(&mut self) -> Option<BasicError> {
+        // Enter の改行を VRAM へ書き込んでから行を読む。
+        self.machine.screen_putc(b'\n');
+        let start = self.machine.screen_line_start();
+        let line = self.read_vram_text(start);
+        if line.is_empty() {
+            return None;
+        }
+        self.run_line(&line)
+    }
+
+    /// 1 行を REPL 実行し、結果に応じて実行継続・INPUT 待ちへ遷移する。
+    fn run_line(&mut self, line: &[u8]) -> Option<BasicError> {
         self.machine.is_esc_pressed = false;
         match exec_line_bytes(&mut self.machine, line) {
             Ok(LineOutcome::Executed) => self.finish_executed(),
@@ -268,34 +300,21 @@ impl Session {
         }
     }
 
-    /// Enter 確定時: カーソル行を生バイト列として取り出し REPL 実行する。
-    fn execute_current_line(&mut self) -> Option<BasicError> {
-        // Enter の改行を VRAM へ書き込んでから行を読む。
-        self.machine.screen_putc(b'\n');
-        let p = self.machine.screen_line_start();
+    /// VRAM の `start` から最初の空セル (0) 直前までを生バイト列で取り出す。
+    ///
+    /// String 経由にしないのは、0x80-0xFF のグラフィック文字が UTF-8 に展開されて
+    /// しまうため。
+    fn read_vram_text(&self, start: usize) -> Vec<u8> {
+        let text = &self.machine.ram[start..OFFSET_RAM_VRAM + SIZE_RAM_VRAM];
+        let len = text.iter().position(|&b| b == 0).unwrap_or(text.len());
+        text[..len].to_vec()
+    }
 
-        // VRAM から行長を測り生バイトのスライスを得る (String 経由は 0x80-0xFF
-        // のグラフィック文字を UTF-8 に展開してしまうため不可)。
-        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
-        let len = self.machine.ram[p..vram_end]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(vram_end - p);
-        if len == 0 {
-            return None;
-        }
-
-        self.machine.is_esc_pressed = false;
-        // Machine 借用のため一旦スライスをローカルにコピー。
-        let line: Vec<u8> = self.machine.ram[p..p + len].to_vec();
-        match exec_line_bytes(&mut self.machine, &line) {
-            Ok(LineOutcome::Executed) => self.finish_executed(),
-            Ok(LineOutcome::Edited) => None,
-            Ok(LineOutcome::AwaitingInput) => {
-                self.begin_input();
-                None
-            }
-            Err(e) => Some(e),
+    /// 実行完了の "OK" を表示する。直前の F1 (CLS) が抑止を予約していれば
+    /// 表示せずに予約を消費する。
+    fn print_ok_unless_suppressed(&mut self) {
+        if !std::mem::take(&mut self.suppress_next_ok) {
+            self.machine.put_str("OK\n");
         }
     }
 
@@ -307,9 +326,7 @@ impl Session {
     /// 委譲し、UI を固めない。
     fn finish_executed(&mut self) -> Option<BasicError> {
         if self.machine.pc == PC_NULL {
-            if !std::mem::take(&mut self.suppress_next_ok) {
-                self.machine.put_str("OK\n");
-            }
+            self.print_ok_unless_suppressed();
             return None;
         }
         self.is_running = true;
@@ -333,9 +350,7 @@ impl Session {
                 self.machine.is_esc_pressed = false;
                 return match res {
                     BasicResult::Execute => {
-                        if !std::mem::take(&mut self.suppress_next_ok) {
-                            self.machine.put_str("OK\n");
-                        }
+                        self.print_ok_unless_suppressed();
                         None
                     }
                     BasicResult::Input => {
@@ -349,9 +364,7 @@ impl Session {
             }
             if self.machine.pc == PC_NULL {
                 self.is_running = false;
-                if !std::mem::take(&mut self.suppress_next_ok) {
-                    self.machine.put_str("OK\n");
-                }
+                self.print_ok_unless_suppressed();
                 break;
             }
         }
@@ -368,16 +381,10 @@ impl Session {
     /// INPUT の入力確定。プロンプト直後から行末までの VRAM を値テキストとして
     /// 読み取り、変数へ反映して実行を再開する。
     fn complete_input(&mut self) {
-        // 値開始位置から行末 (最初の空セル) までを値テキストとして読み取る。
         let (ox, oy) = self.input_origin.take().unwrap_or((0, 0));
         let w = self.machine.screen_cols();
         let start = OFFSET_RAM_VRAM + ox.max(0) as usize + oy.max(0) as usize * w;
-        let vram_end = OFFSET_RAM_VRAM + SIZE_RAM_VRAM;
-        let len = self.machine.ram[start..vram_end]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(vram_end - start);
-        let line: Vec<u8> = self.machine.ram[start..start + len].to_vec();
+        let line = self.read_vram_text(start);
 
         self.machine.input_complete(&line);
         // pc は INPUT 文の直後を指すので、実行を再開する。

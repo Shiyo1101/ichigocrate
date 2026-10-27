@@ -5,7 +5,7 @@
 
 use ichigocrate_core::{
     ram::IJB_SIZEOF_ARRAY,
-    render::{render_mono, RenderState, IMG_H, IMG_W},
+    render::{cursor_blink_phase, render_mono, RenderState, IMG_H, IMG_W},
     session::Session,
     BasicError, Machine,
 };
@@ -14,7 +14,7 @@ use wasm_bindgen::{Clamped, JsCast};
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 use crate::keymap::{code_to_btn_code, code_to_hid};
-use crate::output::{detect_scroll, screen_char};
+use crate::output::{screen_text, OutputTracker};
 use crate::storage::WebStorage;
 
 /// IchigoJam VM を 1 つ抱えるランナー。JS から `new IchigoCrateRunner(canvas)` で生成。
@@ -33,11 +33,8 @@ pub struct IchigoCrateRunner {
     on_print: Option<js_sys::Function>,
     /// onError コールバック (実行時エラー通知)。即時文・RUN 中の停止理由を構造化して流す。
     on_error: Option<js_sys::Function>,
-    /// onPrint 差分検出用: 直前フレームの VRAM スナップショット。
-    prev_vram: Vec<u8>,
-    /// onPrint で出力済みの位置 (出力カーソル列・行)。ここから現在のカーソルまでが新規。
-    out_x: usize,
-    out_y: usize,
+    /// onPrint へ流す新規出力の差分抽出器。
+    output: OutputTracker,
 }
 
 #[wasm_bindgen]
@@ -53,7 +50,7 @@ impl IchigoCrateRunner {
         canvas: &HtmlCanvasElement,
         storage_prefix: Option<String>,
         persist: Option<bool>,
-    ) -> Result<IchigoCrateRunner, JsValue> {
+    ) -> Result<Self, JsValue> {
         console_error_panic_hook::set_once();
 
         canvas.set_width(IMG_W as u32);
@@ -69,13 +66,10 @@ impl IchigoCrateRunner {
             persist.unwrap_or(true),
         )));
         let session = Session::new(machine);
+        let mut output = OutputTracker::default();
+        output.mark_emitted(&session.machine);
 
-        // onPrint の差分基準を現在 (起動バナー直後) に合わせ、バナーは流さない。
-        let prev_vram = session.machine.vram().to_vec();
-        let out_x = session.machine.cursorx.max(0) as usize;
-        let out_y = session.machine.cursory.max(0) as usize;
-
-        Ok(IchigoCrateRunner {
+        Ok(Self {
             session,
             ctx,
             mono: vec![0; IMG_W * IMG_H],
@@ -83,26 +77,20 @@ impl IchigoCrateRunner {
             start_ms: None,
             on_print: None,
             on_error: None,
-            prev_vram,
-            out_x,
-            out_y,
+            output,
         })
     }
 
     /// 1 フレーム進めて再描画する。`now_ms` は `performance.now()` を渡す。
     pub fn tick(&mut self, now_ms: f64) {
-        if self.start_ms.is_none() {
-            self.start_ms = Some(now_ms);
-        }
+        let start_ms = *self.start_ms.get_or_insert(now_ms);
 
         if let Some(e) = self.session.tick(now_ms) {
             self.report_error(e);
         }
 
-        self.collect_output();
-
-        let blink = ((now_ms - self.start_ms.unwrap_or(now_ms)) / 333.0) as u32;
-        self.render(blink);
+        self.emit_output();
+        self.render(cursor_blink_phase(now_ms - start_ms));
     }
 
     /// キーイベントを 1 件処理する。`code` は `KeyboardEvent.code` (物理キー位置)、
@@ -150,15 +138,7 @@ impl IchigoCrateRunner {
         let Some(hid) = code_to_hid(code, self.session.machine.keyboard_id()) else {
             return;
         };
-        let mut c = self.session.machine.keymap_lookup(hid, shift, alt);
-        if c == 0 {
-            return;
-        }
-        // IchigoJam 慣習: 英字は常に大文字 (CAPS デフォルト ON)。
-        if c.is_ascii_lowercase() {
-            c -= b'a' - b'A';
-        }
-        if let Some(e) = self.session.feed_char(c) {
+        if let Some(e) = self.session.feed_key(hid, shift, alt) {
             self.report_error(e);
         }
     }
@@ -192,12 +172,9 @@ impl IchigoCrateRunner {
     /// 流したいときは将来の bytes 版を使う想定)。
     #[wasm_bindgen(js_name = "type")]
     pub fn type_text(&mut self, text: &str) {
-        for ch in text.chars() {
-            let u = ch as u32;
-            if u < 0x80 {
-                if let Some(e) = self.session.feed_char(u as u8) {
-                    self.report_error(e);
-                }
+        for b in text.chars().filter(char::is_ascii).map(|ch| ch as u8) {
+            if let Some(e) = self.session.feed_char(b) {
+                self.report_error(e);
             }
         }
     }
@@ -228,11 +205,7 @@ impl IchigoCrateRunner {
     #[wasm_bindgen(js_name = "reset")]
     pub fn reset(&mut self) {
         self.session.reset();
-
-        // onPrint の差分基準を現在 (起動バナー直後) に合わせ、バナーは流さない (new() と同じ扱い)。
-        self.prev_vram = self.session.machine.vram().to_vec();
-        self.out_x = self.session.machine.cursorx.max(0) as usize;
-        self.out_y = self.session.machine.cursory.max(0) as usize;
+        self.output.mark_emitted(&self.session.machine);
     }
 
     /// INKEY()/BTN() 用の物理キー押下。`code` は IchigoJam キーコード
@@ -258,35 +231,18 @@ impl IchigoCrateRunner {
     /// 詰め、行は改行で連結する。印字不能・グラフィック文字は `?` に潰す。
     #[wasm_bindgen(js_name = "getScreenText")]
     pub fn get_screen_text(&self) -> String {
-        let cols = self.session.machine.screen_cols();
-        let rows = self.session.machine.screen_rows();
-        let vram = self.session.machine.vram();
-
-        let mut out = String::new();
-        for y in 0..rows {
-            let row = &vram[y * cols..(y + 1) * cols];
-            let line: String = row.iter().map(|&c| screen_char(c)).collect();
-            out.push_str(line.trim_end());
-            if y + 1 < rows {
-                out.push('\n');
-            }
-        }
-        out
+        screen_text(&self.session.machine)
     }
 
     /// 変数 A-Z の値を取得する (`name` の先頭 1 文字、大小無視)。
     #[wasm_bindgen(js_name = "getVar")]
     pub fn get_var(&self, name: &str) -> i16 {
-        let Some(ch) = name.bytes().next() else {
-            return 0;
-        };
-        let up = ch.to_ascii_uppercase();
-        if up.is_ascii_uppercase() {
-            self.session
+        match name.bytes().next().map(|b| b.to_ascii_uppercase()) {
+            Some(up @ b'A'..=b'Z') => self
+                .session
                 .machine
-                .var_get(IJB_SIZEOF_ARRAY + (up - b'A') as usize)
-        } else {
-            0
+                .var_get(IJB_SIZEOF_ARRAY + usize::from(up - b'A')),
+            _ => 0,
         }
     }
 
@@ -335,47 +291,12 @@ impl IchigoCrateRunner {
         }
     }
 
-    /// 画面出力の差分を抽出して onPrint コールバックへ流す (登録時のみ)。
-    ///
-    /// 直前フレームからの VRAM スクロール量を補正し、追跡中の出力位置から現在の
-    /// カーソルまでを行単位で取り出す。core を一切改変しない近似実装。
-    fn collect_output(&mut self) {
-        let Some(cb) = self.on_print.clone() else {
+    /// 新規の画面出力を onPrint コールバックへ流す。未登録なら差分抽出自体を省く。
+    fn emit_output(&mut self) {
+        let Some(cb) = &self.on_print else {
             return;
         };
-        let cols = self.session.machine.screen_cols();
-        let rows = self.session.machine.screen_rows();
-        let vram = self.session.machine.vram().to_vec();
-        let cx = (self.session.machine.cursorx.max(0) as usize).min(cols);
-        let cy = (self.session.machine.cursory.max(0) as usize).min(rows.saturating_sub(1));
-
-        let scroll = detect_scroll(&self.prev_vram, &vram, cols, rows);
-        if scroll > 0 {
-            self.out_y = self.out_y.saturating_sub(scroll);
-        }
-
-        let mut chunk = String::new();
-        if (self.out_y, self.out_x) < (cy, cx) {
-            let mut y = self.out_y;
-            while y <= cy {
-                let start = if y == self.out_y { self.out_x } else { 0 };
-                let end = if y == cy { cx } else { cols };
-                let row = &vram[y * cols..y * cols + cols];
-                let mut line: String = row[start..end].iter().map(|&c| screen_char(c)).collect();
-                if y < cy {
-                    // 行末空白を詰めて改行 (折返しで満杯の行は詰まらない)。
-                    line.truncate(line.trim_end().len());
-                    line.push('\n');
-                }
-                chunk.push_str(&line);
-                y += 1;
-            }
-        }
-
-        self.out_x = cx;
-        self.out_y = cy;
-        self.prev_vram = vram;
-
+        let chunk = self.output.take_new_output(&self.session.machine);
         if !chunk.is_empty() {
             let _ = cb.call1(&JsValue::NULL, &JsValue::from_str(&chunk));
         }
@@ -387,7 +308,7 @@ impl IchigoCrateRunner {
         if e == BasicError::Break {
             return;
         }
-        let Some(cb) = self.on_error.clone() else {
+        let Some(cb) = &self.on_error else {
             return;
         };
         let obj = js_sys::Object::new();
@@ -399,13 +320,9 @@ impl IchigoCrateRunner {
     fn render(&mut self, blink_phase: u32) {
         let state = RenderState::capture(&self.session.machine, blink_phase);
         render_mono(&mut self.mono, &self.session.machine, &state);
-        for (i, &on) in self.mono.iter().enumerate() {
-            let v = if on != 0 { 255 } else { 0 };
-            let p = i * 4;
-            self.rgba[p] = v;
-            self.rgba[p + 1] = v;
-            self.rgba[p + 2] = v;
-            self.rgba[p + 3] = 255;
+        for (px, &on) in self.rgba.chunks_exact_mut(4).zip(&self.mono) {
+            let v = if on != 0 { u8::MAX } else { 0 };
+            px.copy_from_slice(&[v, v, v, u8::MAX]);
         }
         if let Ok(img) = ImageData::new_with_u8_clamped_array_and_sh(
             Clamped(&self.rgba),
