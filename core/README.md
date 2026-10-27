@@ -49,7 +49,6 @@ core/
 
 - コマンド: OUT, CLO, PWM, DAC, UART, BPS, SLEEP, IOT.OUT, WS.LED
 - 関数: IN, ANA, USR, ASC, I2CR, I2CW, IOT.IN
-- その他: Morse 拡張
 
 ## テスト
 
