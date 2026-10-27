@@ -98,7 +98,21 @@ impl IchigoCrateRunner {
     ///
     /// 物理キー位置で keymap を引くため、`KBD` コマンドの US/JA 切替が OS の
     /// 入力レイアウトに依らず効く。
-    pub fn on_key(&mut self, code: &str, shift: bool, alt: bool, pressed: bool) {
+    ///
+    /// `caps_lock` は `KeyboardEvent.getModifierState("CapsLock")` を渡す (省略可)。
+    /// macOS のブラウザは CapsLock の keydown/keyup が不規則なので、押下ではなく
+    /// 状態の変化で CAPS を反転する。
+    pub fn on_key(
+        &mut self,
+        code: &str,
+        shift: bool,
+        alt: bool,
+        pressed: bool,
+        caps_lock: Option<bool>,
+    ) {
+        if let Some(caps_lock) = caps_lock {
+            self.session.machine.sync_host_caps_lock(caps_lock);
+        }
         // INKEY()/BTN() 用の押下状態は押下/解放の両方を反映する。
         if let Some(btn) = code_to_btn_code(code) {
             self.session.machine.key_set_down(btn, pressed);

@@ -23,8 +23,9 @@ cargo run --release -p ichigocrate-app
 | F9   | `FILES` を即時実行                               |
 | ESC  | プログラム中断 (Break)                           |
 | F10  | ローマ字 → 半角カナ変換のオン/オフ               |
+| CapsLock | 英字の大文字/小文字入力の切り替え (CAPS)      |
 
-英字は常に大文字入力 (CAPS デフォルト ON、IchigoJam 慣習)。カナモード ON のあいだはウィンドウタイトルに `KANA` が表示される。
+英字は既定で大文字入力 (CAPS 既定 ON、実機と同じ)。CAPS が ON の間は Shift 併用で小文字になり、CapsLock を押すと反転する。egui は CapsLock キーを報告しないため、英字を Shift なしで打ったときに OS が生成した文字から CapsLock の状態変化を検知している (切り替えは次に英字を打ったときに反映される)。カナモード ON のあいだはウィンドウタイトルに `KANA` が表示される。
 
 ## ファイル保存先
 

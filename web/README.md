@@ -70,6 +70,9 @@ r.is_led(); // LED 点灯状態 (枠表示などフロント側で反映)
 | F9   | `FILES` を即時実行                               |
 | ESC  | プログラム中断 (Break)                           |
 | F10  | ローマ字 → 半角カナ変換のオン/オフ               |
+| CapsLock | 英字の大文字/小文字入力の切り替え (CAPS)      |
+
+英字は既定で大文字入力 (CAPS 既定 ON、実機と同じ)。CAPS が ON の間は Shift 併用で小文字になり、CapsLock を押すと反転する。`on_key` の第 5 引数に `KeyboardEvent.getModifierState("CapsLock")` を渡すと、その状態の変化で CAPS を反転する (macOS のブラウザは CapsLock の keydown/keyup が不規則なため、押下ではなく状態で判定する)。
 
 ## 未対応
 

@@ -6,7 +6,8 @@
 
 mod common;
 
-use common::screen_text;
+use common::{screen_text, vram_line};
+use ichigocrate_core::keymap::HID_CAPS_LOCK;
 use ichigocrate_core::session::{fkey_binding, Session, FRAME_MS};
 use ichigocrate_core::{BasicError, Machine};
 
@@ -205,4 +206,62 @@ fn reset_returns_to_power_on_state() {
     assert!(!s.is_running());
     assert!(!s.is_awaiting_input());
     assert!(screen_text(&s.machine).contains("OK"));
+}
+
+/// 英字キー (HID 0x04 = A) を押して、REPL の現在行に出た文字を返す。
+fn press_a(s: &mut Session, shift: bool) -> String {
+    s.machine.screen_clear_line();
+    let _ = s.feed_key(0x04, shift, false);
+    vram_line(&s.machine, s.machine.cursory as usize)
+}
+
+/// CAPS は既定 ON (Shift なしで大文字、Shift ありで小文字)。CapsLock で反転する。
+#[test]
+fn caps_lock_toggles_letter_case() {
+    let mut s = new_session();
+    assert_eq!(press_a(&mut s, false), "A");
+    assert_eq!(press_a(&mut s, true), "a");
+
+    let _ = s.feed_key(HID_CAPS_LOCK, false, false);
+    assert!(!s.machine.is_caps_on);
+    assert_eq!(press_a(&mut s, false), "a");
+    assert_eq!(press_a(&mut s, true), "A");
+
+    let _ = s.feed_key(HID_CAPS_LOCK, false, false);
+    assert_eq!(press_a(&mut s, false), "A");
+}
+
+/// CAPS は英字以外 (数字・記号) には影響しない。
+#[test]
+fn caps_does_not_affect_non_letters() {
+    let mut s = new_session();
+    s.machine.screen_clear_line();
+    let _ = s.feed_key(0x1e, false, false); // 1
+    let _ = s.feed_key(0x1e, true, false); // Shift+1 = !
+    assert_eq!(vram_line(&s.machine, s.machine.cursory as usize), "1!");
+}
+
+/// OS の CapsLock 状態を受け取るホスト向け: 初回は基準として記録するだけで、
+/// 状態が変わったときに CAPS を反転する。
+#[test]
+fn host_caps_lock_state_toggles_on_change() {
+    let mut s = new_session();
+    // OS 側が ON のまま起動しても、CAPS は既定の ON のまま
+    s.machine.sync_host_caps_lock(true);
+    assert!(s.machine.is_caps_on);
+    s.machine.sync_host_caps_lock(true);
+    assert!(s.machine.is_caps_on, "変化が無ければ反転しない");
+    s.machine.sync_host_caps_lock(false);
+    assert!(!s.machine.is_caps_on);
+    s.machine.sync_host_caps_lock(true);
+    assert!(s.machine.is_caps_on);
+}
+
+#[test]
+fn reset_restores_caps_on() {
+    let mut s = new_session();
+    let _ = s.feed_key(HID_CAPS_LOCK, false, false);
+    assert!(!s.machine.is_caps_on);
+    s.reset();
+    assert!(s.machine.is_caps_on);
 }

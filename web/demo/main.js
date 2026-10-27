@@ -39,9 +39,9 @@ const PREVENT = new Set([
 canvas.addEventListener("keydown", (e) => {
   // Ctrl/Cmd 併用 (コピー等) は OS/ブラウザに委ねる。
   if (e.ctrlKey || e.metaKey) return;
-  runner.on_key(e.code, e.shiftKey, e.altKey, true);
+  runner.on_key(e.code, e.shiftKey, e.altKey, true, e.getModifierState("CapsLock"));
   if (PREVENT.has(e.code)) e.preventDefault();
 });
 canvas.addEventListener("keyup", (e) => {
-  runner.on_key(e.code, e.shiftKey, e.altKey, false);
+  runner.on_key(e.code, e.shiftKey, e.altKey, false, e.getModifierState("CapsLock"));
 });
