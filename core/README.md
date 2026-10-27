@@ -32,13 +32,15 @@ core/
 ### 実装済み
 
 - コマンド: PRINT (`?`), LET, IF / THEN / ELSE, FOR / NEXT, GOTO, GOSUB / RETURN (`GSB` / `RTN`), END / STOP, CONT, REM (`'`), INPUT, LIST, NEW, RUN, RENUM, RESET, HELP, OK, CLV (`CLEAR`), CLS, CLT, CLK, CLP, LOAD, SAVE, LRUN, FILES, LED, POKE, COPY, LOCATE (`LC`), SCROLL, WAIT, DRAW, BEEP, PLAY, TEMPO, SRND, VIDEO, KBD
-- 関数: ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS, SOUND, BTN, SCR, VPEEK, POINT, SIN, COS, CHR$ / STR$ / DEC$ / HEX$ / BIN$
+- 関数: ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS, SOUND, BTN, SCR, VPEEK, POINT, SIN, COS, ASC, USR, CHR$ / STR$ / DEC$ / HEX$ / BIN$
 
 移植・ホスト境界に関わる補足:
 
 - RESET — `Machine::power_on_reset` に委譲。LED・カナ入力・VIDEO 設定・PSG・乱数シードなど電源断で失われる状態も初期化する (SAVE/LOAD のストレージのみ保持)。ホストの外部リセット API ([web](../web) の `IchigoCrateHandle.reset()` 等) も同じ関数を使う
 - INPUT — `Session` 経由なら Enter (`on_enter`) で値が確定し、ESC (`on_escape`) で中断される。`Machine` を直接使う場合は `is_awaiting_input` で入力待ちを検知し、確定行を `input_complete` へ渡す
 - WAIT — 実時間での待機は `Session` が管理する ([アーキテクチャ要点](#アーキテクチャ要点) 参照)
+- ASC — 元ファーム同様 PEEK の別名。文字列リテラルは自身のアドレスに評価されるため `ASC("A")` は 65 になる
+- USR — 機械語は実行できないため、PC 向けの元ファーム (console 版) と同じく常に 0 を返す
 - LED — 状態を `Machine` に保持するのみで、点灯の表現はホスト側の責務
 - VIDEO — 拡大時は `screen_cols()` / `screen_rows()` 自体が縮む (`32/24 >> 拡大段階`) ため、ホスト側も折り返しやカーソル範囲の計算にこの値を使う。clkdiv 引数 (実機の省電力用クロック分周) は読み飛ばす
 - KBD — 実機はフラッシュへ保存するが本移植はメモリ内のみ (既定は JA)。`VER(2)` で現在値を返す
@@ -48,7 +50,7 @@ core/
 実行すると Syntax error になる。
 
 - コマンド: OUT, CLO, PWM, DAC, UART, BPS, SLEEP, IOT.OUT, WS.LED
-- 関数: IN, ANA, USR, ASC, I2CR, I2CW, IOT.IN
+- 関数: IN, ANA, I2CR, I2CW, IOT.IN
 
 ## テスト
 
