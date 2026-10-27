@@ -213,10 +213,6 @@ impl Machine {
                 self.expect_paren_close()?;
                 Ok(self.psg_sound() as i16)
             }
-            TOKEN_ANA => {
-                self.eval_optional_arg()?;
-                Ok(0)
-            }
             TOKEN_FREE => Ok(((IJB_SIZEOF_LIST as u16) - 2 - self.list_size) as i16),
             TOKEN_VER => {
                 let n = self.eval_optional_arg()?;
@@ -293,11 +289,6 @@ impl Machine {
                 }
                 Ok(sin360(v as i32) as i16)
             }
-            TOKEN_IN => {
-                // 実機 GPIO 入力。デスクトップ移植では未対応のため 0 固定
-                self.eval_optional_arg()?;
-                Ok(0)
-            }
             TOKEN_VPEEK | TOKEN_SCR | TOKEN_POINT => {
                 let kind = t.code;
                 let t = self.token_get();
@@ -314,17 +305,6 @@ impl Machine {
                 } else {
                     Ok(self.screen_get(v as i32, v2 as i32) as i16)
                 }
-            }
-            TOKEN_USR => {
-                self.eval_expression()?;
-                let t = self.token_get();
-                if t.code == TOKEN_COMMA {
-                    self.eval_expression()?;
-                    self.expect_paren_close()?;
-                } else if t.code != TOKEN_PAREN_E {
-                    return Err(ERR_SYNTAX_ERROR);
-                }
-                Ok(0)
             }
             TOKEN_STRING => {
                 let p = self.skip_string_literal();
