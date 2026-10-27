@@ -27,71 +27,36 @@ core/
 
 ## 移植範囲
 
-**実装済み**
+元ファームウェア ([ichigojam-firm](https://github.com/IchigoJam/ichigojam-firm) の `IchigoJam_BASIC`) との対応。
 
-BASIC コア言語のコマンド一覧:
+### 実装済み
 
-| コマンド         | 備考                                              |
-| ---------------- | ------------------------------------------------- |
-| PRINT            | `?` エイリアスあり                                |
-| LET              |                                                   |
-| IF / THEN / ELSE |                                                   |
-| FOR / NEXT       |                                                   |
-| GOTO             |                                                   |
-| GOSUB / RETURN   | `GSB` / `RTN` エイリアスあり                      |
-| REM              | `'` エイリアスあり                                |
-| INPUT            | 対話入力対応 (下記参照)                           |
-| LIST             |                                                   |
-| NEW              | プログラムのみクリア (変数は残る)                 |
-| RUN              |                                                   |
-| END / STOP       |                                                   |
-| CONT             |                                                   |
-| RENUM            | GOTO/GOSUB 参照も書き換え                         |
-| RESET            | 電源 ON/OFF による再起動相当 (下記参照)           |
-| HELP             | メモリマップを表示                                |
-| OK               | `OK 2` で応答メッセージを抑制                     |
-| CLV              | 変数クリア。`CLEAR` エイリアスあり                |
-| CLS              | 画面クリア                                        |
-| CLT              | `TICK()` カウンタクリア                           |
-| CLK              |                                                   |
-| CLP              | PCG をフォントへ初期化                            |
-| CLO              | no-op                                             |
-| LOAD             |                                                   |
-| SAVE             |                                                   |
-| LRUN             | LOAD 直後に RUN                                   |
-| FILES            |                                                   |
-| LED              | 状態を `Machine` に保持。点灯表現はホスト側の責務 |
-| OUT              | no-op                                             |
-| POKE             |                                                   |
-| COPY             |                                                   |
-| LOCATE           | `LC` エイリアスあり                               |
-| SCROLL           |                                                   |
-| WAIT             | 実時間での待機は `Session` が管理 (下記参照)      |
-| DRAW             |                                                   |
-| BEEP             |                                                   |
-| PLAY             | MML                                               |
-| TEMPO            |                                                   |
-| SRND             |                                                   |
-| VIDEO            | モード切替 (下記参照)                             |
-| KBD              | キーボードレイアウト切替 (Ver1.5、下記参照)       |
+- コマンド: PRINT (`?`), LET, IF / THEN / ELSE, FOR / NEXT, GOTO, GOSUB / RETURN (`GSB` / `RTN`), END / STOP, CONT, REM (`'`), INPUT, LIST, NEW, RUN, RENUM, RESET, HELP, OK, CLV (`CLEAR`), CLS, CLT, CLK, CLP, LOAD, SAVE, LRUN, FILES, LED, POKE, COPY, LOCATE (`LC`), SCROLL, WAIT, DRAW, BEEP, PLAY, TEMPO, SRND, VIDEO, KBD
+- 関数: ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS, SOUND, BTN, SCR, VPEEK, POINT, SIN, COS, CHR$ / STR$ / DEC$ / HEX$ / BIN$
 
-実装メモ (移植・ホスト境界に関わる点のみ):
+移植・ホスト境界に関わる補足:
 
-- 関数: ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS, SOUND, ANA (no-op), BTN, IN (no-op), SCR, VPEEK, POINT, CHR$/STR$/DEC$/HEX$/BIN$, SIN/COS, USR (no-op)
-- RESET — `Machine::power_on_reset` に委譲。`basic_init` と異なり LED・カナ入力・VIDEO 設定・PSG・乱数シードなど、電源断で失われるハードウェア相当の状態も含めて再起動する (SAVE/LOAD のストレージのみフラッシュ相当として保持)。ホストが提供する外部リセット API ([web](../web) の `IchigoCrateHandle.reset()` 等) も同じ関数に委譲する
-- INPUT — `Session` 経由なら Enter (`on_enter`) で値が確定し、ESC (`on_escape`) で中断される。`Machine` を直接使う場合は `is_awaiting_input` で入力待ちを検知し、確定行を `input_complete` へ渡して実行を再開する
-- VIDEO — 拡大時は `screen_cols()`/`screen_rows()` 自体が縮む (`32/24 >> 拡大段階`) ため、折り返し・カーソル可動範囲の計算はホスト側もこの値を参照する必要がある
-- KBD — 実機はフラッシュへ永続化するが本移植はメモリ内のみ (`Machine::new()` の既定は JA)。`VER(2)` で現在値を返す
+- RESET — `Machine::power_on_reset` に委譲。LED・カナ入力・VIDEO 設定・PSG・乱数シードなど電源断で失われる状態も初期化する (SAVE/LOAD のストレージのみ保持)。ホストの外部リセット API ([web](../web) の `IchigoCrateHandle.reset()` 等) も同じ関数を使う
+- INPUT — `Session` 経由なら Enter (`on_enter`) で値が確定し、ESC (`on_escape`) で中断される。`Machine` を直接使う場合は `is_awaiting_input` で入力待ちを検知し、確定行を `input_complete` へ渡す
+- WAIT — 実時間での待機は `Session` が管理する ([アーキテクチャ要点](#アーキテクチャ要点) 参照)
+- LED — 状態を `Machine` に保持するのみで、点灯の表現はホスト側の責務
+- VIDEO — 拡大時は `screen_cols()` / `screen_rows()` 自体が縮む (`32/24 >> 拡大段階`) ため、ホスト側も折り返しやカーソル範囲の計算にこの値を使う。clkdiv 引数 (実機の省電力用クロック分周) は読み飛ばす
+- KBD — 実機はフラッシュへ保存するが本移植はメモリ内のみ (既定は JA)。`VER(2)` で現在値を返す
 
-**未実装 (スコープ外)**
+### 受け付けるが何もしない
 
-- IoT 拡張 (IOT.IN / IOT.OUT)
-- 多言語フォント (中国語、ベトナム語、モンゴル語)
-- I2C 通信
-- UART
-- PWM / DAC コマンド
-- SLEEP / SWITCH / BPS / WS.LED
-- VIDEO の clkdiv 引数 (省電力時のクロック分周は実機固有のため読み飛ばし)
+実機の GPIO・アナログ入力・機械語呼び出しに相当するもの。構文としては受け付け、エラーにはしない。
+
+- コマンド: OUT, CLO
+- 関数: IN (常に 0), ANA (常に 0), USR (常に 0)
+
+### 未実装
+
+実行すると Syntax error になる。
+
+- コマンド: PWM, DAC, UART, BPS, SLEEP, IOT.OUT, WS.LED
+- 関数: ASC, I2CR, I2CW, IOT.IN
+- その他: 多言語フォント (中国語・ベトナム語・モンゴル語)、Morse 拡張
 
 ## テスト
 
