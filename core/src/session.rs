@@ -175,6 +175,11 @@ impl Session {
             self.wait_until_ms = Some(base + extra);
             self.machine.wait_frames = 0;
         }
+        // 待機中 (WAIT・LIST の一時停止) の ESC は待たずに効かせる。実機の `IJB_wait` も
+        // ESC で待機を打ち切る。止めるのは次の step (Break) が行う。
+        if self.machine.is_esc_pressed {
+            self.wait_until_ms = None;
+        }
 
         self.machine.is_program_running = self.is_running;
 

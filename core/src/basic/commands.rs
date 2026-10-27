@@ -9,10 +9,19 @@
 //! するだけでよい。
 
 use crate::errors::*;
-use crate::machine::{calc_div, calc_mod, strlen8, Machine, PC_NULL};
+use crate::machine::{calc_div, calc_mod, strlen8, ListCursor, Machine, PC_NULL};
 use crate::net::{parse_https_url, HttpMethod, HttpRequest, PendingHttp};
 use crate::ram::*;
 use crate::tokens::*;
+
+/// LIST で画面 1 枚分を表示するごとに置く待機 (フレーム数)。元ファームの `IJB_wait(40, 1)`。
+const LIST_PAGE_WAIT_FRAMES: u32 = 40;
+
+/// 10 進表記の桁数 (負数は `-` の分を含む)。元ファームの `getBeam`。
+fn decimal_digits(n: i16) -> usize {
+    let digits = (n as i32).unsigned_abs().checked_ilog10().unwrap_or(0) as usize + 1;
+    digits + usize::from(n < 0)
+}
 
 impl Machine {
     /// 行番号付きの入力で LIST 領域へ追加/削除を行う。
@@ -479,17 +488,49 @@ impl Machine {
             }
         }
         self.expect_statement_end()?;
-        let mut index: u16 = 0;
+        self.list_cursor = Some(ListCursor {
+            index: 0,
+            rows: 0,
+            min,
+            max,
+            counted: false,
+        });
+        self.list_continue()
+    }
+
+    /// LIST の表示を進める。画面 1 枚分 (画面の行数 - 1) を超える手前で
+    /// [`LIST_PAGE_WAIT_FRAMES`] だけ待機を積んで一時停止し、続きを `list_cursor` に
+    /// 残す (再開は次の `step_once`)。各行の表示前に ESC を確かめ、押されていれば中断する。
+    pub(super) fn list_continue(&mut self) -> BResult<()> {
+        let Some(mut cur) = self.list_cursor.take() else {
+            return Ok(());
+        };
         loop {
-            let num = self.list_get_number(index);
-            if num == 0 || num as i32 > max {
-                break;
+            let num = self.list_get_number(cur.index);
+            if num == 0 || num as i32 > cur.max {
+                return Ok(());
             }
-            if num >= min {
+            if num >= cur.min {
+                let text_start = OFFSET_RAM_LIST + cur.index as usize + 3;
+                if !std::mem::take(&mut cur.counted) {
+                    // 行番号 + 空白 + 本文が画面上で占める行数 (元ファームの計算どおり)
+                    let len = decimal_digits(num) + strlen8(&self.ram, text_start) + 2;
+                    let rows = (len / self.text_cols) as i32 + 1;
+                    cur.rows += rows;
+                    if cur.rows >= self.text_rows as i32 - 1 {
+                        cur.rows = rows;
+                        cur.counted = true;
+                        self.wait_frames = self.wait_frames.saturating_add(LIST_PAGE_WAIT_FRAMES);
+                        self.list_cursor = Some(cur);
+                        return Ok(());
+                    }
+                }
+                if self.is_break_requested() {
+                    return Err(ERR_BREAK);
+                }
                 self.put_num(num as i32);
                 self.put_chr(b' ');
-                let s_start = OFFSET_RAM_LIST + index as usize + 3;
-                let mut p = s_start;
+                let mut p = text_start;
                 while p < self.ram.len() && self.ram[p] != 0 {
                     let c = self.ram[p];
                     self.put_chr(c);
@@ -497,11 +538,11 @@ impl Machine {
                 }
                 self.put_chr(b'\n');
             }
-            index = index
-                .wrapping_add(self.list_get_length(index) as u16)
+            cur.index = cur
+                .index
+                .wrapping_add(self.list_get_length(cur.index) as u16)
                 .wrapping_add(4);
         }
-        Ok(())
     }
 
     pub(super) fn command_led(&mut self) -> BResult<()> {
