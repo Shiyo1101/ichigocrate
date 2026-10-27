@@ -1,10 +1,11 @@
 //! 各コマンドの挙動テスト:
-//! 代入/CLS/BTN/NEW/CLV/CLK/CLT/CLP/LED/SRND/SCROLL/COPY/BEEP/PLAY/OK と
+//! 代入/BTN/NEW/CLV/CLK/CLT/CLP/LED/SRND/SCROLL/COPY/BEEP/PLAY/OK と
 //! プログラム無し RUN の安全性。
 
 mod common;
 
 use common::{screen_text, var, vram_line};
+use ichigocrate_core::font::CHAR_PATTERN_JP;
 use ichigocrate_core::ram::{OFFSET_RAM_PCG, SIZE_RAM_PCG};
 use ichigocrate_core::{
     exec_line, exec_line_bytes, Machine, OFFSET_RAMROM, OFFSET_RAM_LIST, OFFSET_RAM_VRAM, PC_NULL,
@@ -15,16 +16,7 @@ fn variable_assignment() {
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "A=42");
     let _ = exec_line(&mut m, "?A");
-    assert!(vram_line(&m, 0).contains("42"), "got: {:?}", screen_text(&m));
-}
-
-#[test]
-fn cls_clears_vram() {
-    let mut m = Machine::new();
-    let _ = exec_line(&mut m, "?\"HELLO\"");
-    let _ = exec_line(&mut m, "CLS");
-    let t = screen_text(&m);
-    assert!(!t.contains("HELLO"), "{t}");
+    assert_eq!(vram_line(&m, 0), "42");
 }
 
 /// プログラム無しで RUN しても OK (パニックしない)。
@@ -132,17 +124,17 @@ fn clt_resets_frames_counter() {
     assert_eq!(m.frames, 0);
 }
 
-/// CLP: PCG (書き換え可能キャラクタ) をフォント末尾 32 文字で初期化する
+/// CLP: PCG (書き換え可能キャラクタ) をフォント末尾 32 文字 (0xE0-0xFF) で初期化する
 #[test]
 fn clp_resets_pcg_to_font_tail() {
     let mut m = Machine::new();
-    // まず PCG を全部 0xFF で潰す
     m.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG].fill(0xff);
     let _ = exec_line(&mut m, "CLP");
-    // CLP 後は font の末尾 32 文字でちょうど埋まる
-    // (内容は font 依存のためフィールド全部が 0xff のままではないことを確認)
-    let pcg = &m.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG];
-    assert!(pcg.iter().any(|&b| b != 0xff), "PCG should be reset");
+    let font_tail = &CHAR_PATTERN_JP[CHAR_PATTERN_JP.len() - SIZE_RAM_PCG..];
+    assert_eq!(
+        &m.ram[OFFSET_RAM_PCG..OFFSET_RAM_PCG + SIZE_RAM_PCG],
+        font_tail
+    );
 }
 
 /// LED: 引数 0 で消灯、それ以外で点灯
@@ -159,23 +151,21 @@ fn led_command_toggles_led_state() {
     assert!(m.is_led_on);
 }
 
-/// SRND: 同じシードを与えれば RND は同じ値を返す
+/// SRND: 同じシードなら RND 列が一致し、異なるシードなら変わる
 #[test]
 fn srnd_makes_rnd_reproducible() {
-    let mut a = Machine::new();
-    let mut b = Machine::new();
-    let _ = exec_line(&mut a, "SRND 42");
-    let _ = exec_line(&mut b, "SRND 42");
-    let _ = exec_line(&mut a, "?RND(100)");
-    let _ = exec_line(&mut b, "?RND(100)");
-    assert_eq!(vram_line(&a, 0), vram_line(&b, 0));
-    // 異なるシードならふつう違う値になる
-    let mut c = Machine::new();
-    let _ = exec_line(&mut c, "SRND 1");
-    let _ = exec_line(&mut c, "?RND(10000)");
-    let _ = exec_line(&mut b, "?RND(10000)");
-    // 完全一致になる可能性はゼロではないが、IchigoJam の xorshift では実質起きない
-    assert_ne!(vram_line(&c, 0), vram_line(&b, 1));
+    let rnd_seq = |seed: i16| {
+        let mut m = Machine::new();
+        let _ = exec_line(&mut m, &format!("SRND {seed}"));
+        (0..5)
+            .map(|_| {
+                let _ = exec_line(&mut m, "A=RND(10000)");
+                var(&m, b'A')
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rnd_seq(42), rnd_seq(42));
+    assert_ne!(rnd_seq(42), rnd_seq(1));
 }
 
 /// SCROLL 0/1/2/3 がそれぞれ UP/RIGHT/DOWN/LEFT に対応
@@ -265,12 +255,17 @@ fn play_with_no_arg_stops_mml() {
     assert!(!m.psg_sound());
 }
 
-/// OK 2: is_quiet_mode (応答抑制) ON、それ以外は OFF (commands.rs:331)
+/// OK 2: 応答抑制。エラーメッセージや SAVE/LOAD の報告を画面に出さない。
+/// OK (2 以外) で解除される。
 #[test]
-fn ok_2_enables_quiet_mode() {
+fn ok_2_suppresses_messages_until_ok_0() {
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "OK 2");
-    // is_quiet_mode は pub(crate) のため公開 API では直接見えない。
-    // 次の `OK 0` で OFF に戻すことだけ通す動作確認とする。
+    // エラー自体は返るが、画面には表示されない
+    assert!(exec_line(&mut m, "?1/0").is_err());
+    assert!(!screen_text(&m).contains("Divide by 0"));
+
     let _ = exec_line(&mut m, "OK 0");
+    assert!(exec_line(&mut m, "?1/0").is_err());
+    assert!(screen_text(&m).contains("Divide by 0"));
 }

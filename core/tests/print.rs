@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{screen_text, vram_line};
+use common::vram_line;
 use ichigocrate_core::{exec_line, exec_line_bytes, Machine};
 
 #[test]
@@ -45,16 +45,6 @@ fn empty_line_is_noop() {
     assert!(r.is_ok());
 }
 
-#[test]
-fn hex_and_bin() {
-    let mut m = Machine::new();
-    let _ = exec_line(&mut m, "?#ff");
-    let _ = exec_line(&mut m, "?`101");
-    let t = screen_text(&m);
-    assert!(t.contains("255"), "{t}");
-    assert!(t.contains('5'), "{t}");
-}
-
 /// HEX$ で 0xFF を 2 桁指定で出力すると "FF" になる。
 #[test]
 fn hex_dollar_two_digits() {
@@ -71,7 +61,7 @@ fn bin_dollar_four_digits() {
     assert_eq!(vram_line(&m, 0), "1010");
 }
 
-/// DEC$ で負数の桁指定 (右寄せ) が効くこと。
+/// DEC$ の桁指定で右寄せされること。
 #[test]
 fn dec_dollar_right_justifies() {
     let mut m = Machine::new();

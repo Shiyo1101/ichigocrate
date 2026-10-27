@@ -18,6 +18,23 @@ fn line_edit_and_list() {
     assert!(t.contains("20 ?\"Y\""), "LIST output missing line 20:\n{t}");
 }
 
+/// 行番号付き入力は番号順に挿入され、同じ番号は置換、番号のみは削除になる。
+#[test]
+fn line_edit_inserts_sorted_replaces_and_deletes() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "30 ?\"C\"");
+    let _ = exec_line(&mut m, "10 ?\"A\"");
+    let _ = exec_line(&mut m, "20 ?\"B\"");
+    let _ = exec_line(&mut m, "20 ?\"NEW\""); // 置換
+    let _ = exec_line(&mut m, "10"); // 削除
+    let _ = exec_line(&mut m, "99"); // 存在しない行の削除は何もしない
+    let _ = exec_line(&mut m, "CLS");
+    let _ = exec_line(&mut m, "LIST");
+    assert_eq!(vram_line(&m, 0), "20 ?\"NEW\"");
+    assert_eq!(vram_line(&m, 1), "30 ?\"C\"");
+    assert_eq!(vram_line(&m, 2), "");
+}
+
 #[test]
 fn clear_line_then_write_command() {
     let mut m = Machine::new();
@@ -298,9 +315,5 @@ fn kbd_switches_physical_key_translation() {
     assert_eq!(m.keymap_lookup(0x1f, true, false), b'@');
     let _ = exec_line(&mut m, "KBD 1");
     assert_eq!(m.keymap_lookup(0x1f, true, false), b'"');
-    // 0x2f: US `[` / JA `@`
-    let _ = exec_line(&mut m, "KBD 0");
-    assert_eq!(m.keymap_lookup(0x2f, false, false), b'[');
-    let _ = exec_line(&mut m, "KBD 1");
-    assert_eq!(m.keymap_lookup(0x2f, false, false), b'@');
+    // 表の中身そのものは keymap.rs の単体テストで網羅している。
 }
