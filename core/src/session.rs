@@ -16,6 +16,7 @@ use std::collections::VecDeque;
 
 use crate::errors::BasicError;
 use crate::keycodes as kc;
+use crate::keymap::HID_CAPS_LOCK;
 use crate::machine::{BasicResult, Machine, PC_NULL};
 use crate::net::{HttpCompletion, HttpError, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS};
 use crate::ram::{OFFSET_RAM_VRAM, SIZE_RAM_VRAM};
@@ -248,13 +249,24 @@ impl Session {
 
     /// 物理キー 1 押下 (HID Usage ID + 修飾キー) を現在の KBD 配列で文字へ解決し、
     /// [`Self::feed_char`] へ流す。割当の無いキーは無視する。
+    ///
+    /// CapsLock ([`HID_CAPS_LOCK`]) は CAPS を反転する。CAPS が ON の間は英字の
+    /// 大文字小文字を反転する (既定 ON なので Shift なしで大文字、Shift ありで小文字)。
     pub fn feed_key(&mut self, hid: u8, shift: bool, alt: bool) -> Option<BasicError> {
+        if hid == HID_CAPS_LOCK {
+            self.machine.toggle_caps();
+            return None;
+        }
         let c = self.machine.keymap_lookup(hid, shift, alt);
         if c == 0 {
             return None;
         }
-        // IchigoJam は CAPS 既定 ON なので、keymap の小文字列を引いても大文字で入力する。
-        self.feed_char(c.to_ascii_uppercase())
+        let c = if self.machine.is_caps_on && c.is_ascii_alphabetic() {
+            c ^ 0x20 // ASCII 英字の大文字小文字反転
+        } else {
+            c
+        };
+        self.feed_char(c)
     }
 
     /// F キー (F1=1 .. F9=9) の割当コマンド投入。REPL 待機中のみ受理し、
