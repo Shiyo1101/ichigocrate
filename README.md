@@ -15,7 +15,7 @@ Cargo ワークスペースとして 3 つのクレートに分かれている�
 
 ```text
 ichigocrate/
-├── core/   # no_std 可能な BASIC インタプリタ本体 (ichigocrate-core)   → core/README.md
+├── core/   # BASIC インタプリタ本体 (ichigocrate-core)                 → core/README.md
 ├── app/    # egui デスクトップフロントエンド (ichigocrate-app)          → app/README.md
 └── web/    # WebAssembly フロントエンド (ichigocrate-web)               → web/README.md
 ```
