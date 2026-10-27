@@ -70,6 +70,11 @@ pub struct Machine {
 
     // ===== キーボード関連 (ホストが書く) =====
     pub is_kana_mode: bool,
+    /// CAPS (英字の大文字小文字を反転する) が有効か。実機と同じく既定 ON で、
+    /// 英字は Shift なしで大文字、Shift ありで小文字になる。
+    pub is_caps_on: bool,
+    /// ホストから最後に受け取った OS の CapsLock 状態 ([`Machine::sync_host_caps_lock`])。
+    pub(crate) host_caps_lock: Option<bool>,
     /// ESC による中断要求が立っているか。実行ループの停止判定に使う。
     pub is_esc_pressed: bool,
 
@@ -227,6 +232,8 @@ impl Machine {
 
             is_overwrite_toggle: false,
             is_kana_mode: false,
+            is_caps_on: true,
+            host_caps_lock: None,
             romaji_pending_0: 0,
             romaji_pending_1: 0,
             is_esc_pressed: false,
@@ -632,6 +639,27 @@ impl Machine {
         self.is_kana_mode = !self.is_kana_mode;
         self.romaji_pending_0 = 0;
         self.romaji_pending_1 = 0;
+    }
+
+    /// CAPS を反転する (CapsLock キー 1 押下)。
+    pub fn toggle_caps(&mut self) {
+        self.is_caps_on = !self.is_caps_on;
+    }
+
+    /// OS の CapsLock 状態をホストから受け取り、前回から変わっていたら CAPS を反転する。
+    ///
+    /// CapsLock の押下そのものを受け取れないホスト (egui や、押下イベントが不規則な
+    /// macOS のブラウザ) 向け。CAPS は OS の状態と一致させるのではなく「押されたら反転」
+    /// として扱うので、起動時は OS の状態に関わらず既定の ON になる (実機と同じ)。
+    /// 初回は基準として記録するだけで反転しない。
+    pub fn sync_host_caps_lock(&mut self, os_caps_lock: bool) {
+        if self
+            .host_caps_lock
+            .replace(os_caps_lock)
+            .is_some_and(|prev| prev != os_caps_lock)
+        {
+            self.toggle_caps();
+        }
     }
 
     /// 対話編集 (REPL) の各キー処理前に呼ぶ。挿入/上書きモードをユーザの

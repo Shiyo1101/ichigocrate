@@ -219,6 +219,8 @@ const fn build_ja() -> [[u8; 4]; 128] {
 pub const KEYMAP_US: [[u8; 4]; 128] = build_us();
 pub const KEYMAP_JA: [[u8; 4]; 128] = build_ja();
 
+/// CapsLock キー (HID "Keyboard Caps Lock")。押すたびに CAPS を切り替える。
+pub const HID_CAPS_LOCK: u8 = 0x39;
 /// US 配列の `\` キー (HID "Keyboard \ and |")。
 pub const HID_BACKSLASH: u8 = 0x31;
 /// JIS 配列の `]` キー (HID "Keyboard Non-US # and ~")。
