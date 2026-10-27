@@ -26,7 +26,7 @@ cd web && ./build.sh                               # pkg/ に wasm + JS グル�
 python3 -m http.server                             # http://localhost:8000/demo/
 ```
 
-ビルド成果物 (`pkg/`) は ES モジュールとして `import` でき、React ラッパや CDN 配布の土台になる。wasm サイズは ~110KB (eframe を載せないため軽量)。
+ビルド成果物 (`pkg/`) は ES モジュールとして `import` でき、React ラッパや CDN 配布の土台になる。eframe を載せないため wasm は軽量 (wasm-opt 未適用で約 170KB)。
 
 ## 外部制御 API (`IchigoCrateHandle`)
 
@@ -41,15 +41,17 @@ r.run(); // RUN。無限ループはフレーム実行へ委譲
 r.type("LIST\n"); // キーボード入力と同等 (実行中は INKEY/INPUT へ)
 r.keyDown(28);
 r.keyUp(28); // BTN()/INKEY() 用 物理キー (28=←)
-r.stop(); // ESC 注入で中断
+r.break(); // ESC 注入で中断
+r.reset(); // 電源 ON/OFF 相当の再起動
 r.getScreenText(); // 画面スナップショット
 r.getVar("A"); // 変数 A-Z
 r.peek(0x900); // メモリ読み取り
 r.onPrint((chunk) => (out += chunk)); // 画面出力ストリーミング購読
+r.onError((e) => console.log(e.code, e.message)); // 実行時エラー通知 (ESC の Break は通知しない)
 r.is_led(); // LED 点灯状態 (枠表示などフロント側で反映)
 ```
 
-実行モデル上、無限ループが常態なので「`exec()` の戻りで完了を待つ」設計は採らず、即時文は同期完了・`RUN` 等はフレーム分割実行へ委譲する。実行中は `type`/`keyDown`/`stop` のみ有効 (`exec`/`run` は停止中のみ受理) で、フレーム途中に割り込まない。
+実行モデル上、無限ループが常態なので「`exec()` の戻りで完了を待つ」設計は採らず、即時文は同期完了・`RUN` 等はフレーム分割実行へ委譲する。実行中は `type`/`keyDown`/`break` のみ有効 (`exec`/`run` は停止中のみ受理) で、フレーム途中に割り込まない。
 
 ## ストレージと出力
 

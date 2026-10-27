@@ -44,6 +44,6 @@ ichigocrate 拡張の `GET` ([core の説明](../core/README.md#get-https-通信
 ## 実装メモ
 
 - **キー入力**: 物理キー位置 (`Event::Key.physical_key`) を USB HID Usage ID へ変換し、`core::keymap` の US/JA 表 (元 C ファーム `hid.h` 由来) を引いて IchigoJam 内部コードに翻訳する。OS のレイアウト変換を経由しないため `KBD` コマンドの効果が実入力に反映される
-- **音声出力**: cpal で矩形波を生成。`Machine.current_tone_hz: f32` を `Arc<AtomicU32>` 経由で共有し、コールバックが波形を生成する
-- **WAIT の実時間変換**: `core` 側は `wait_frames` を加算するだけなので、本アプリが `Instant` を使って 60Hz 換算の待機時間へ変換する (ProMotion など高リフレッシュレート環境でも正確に動作)
+- **音声出力**: cpal で矩形波を生成。`Machine.current_tone_hz: f32` を `Arc<AtomicF32>` 経由で共有し、コールバックが波形を生成する
+- **時刻の受け渡し**: 起動からの経過時間 (ms) を `Instant` で測り、毎フレーム `Session::tick` へ渡す。WAIT の実時間変換や 60Hz tick は core の `Session` が行うので、ProMotion など高リフレッシュレート環境でも WAIT の長さは変わらない
 - **macOS**: IMK (Input Method Kit) 関連のログを stderr フィルタで抑制している
