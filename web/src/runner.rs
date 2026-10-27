@@ -13,6 +13,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::{Clamped, JsCast};
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
+use crate::http::FetchHttpClient;
 use crate::keymap::{code_to_btn_code, code_to_hid};
 use crate::output::{screen_text, OutputTracker};
 use crate::storage::WebStorage;
@@ -65,6 +66,7 @@ impl IchigoCrateRunner {
             storage_prefix.unwrap_or_default(),
             persist.unwrap_or(true),
         )));
+        machine.set_http_client(Box::<FetchHttpClient>::default());
         let session = Session::new(machine);
         let mut output = OutputTracker::default();
         output.mark_emitted(&session.machine);

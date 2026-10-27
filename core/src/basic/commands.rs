@@ -10,6 +10,7 @@
 
 use crate::errors::*;
 use crate::machine::{calc_div, calc_mod, strlen8, Machine, PC_NULL};
+use crate::net::{parse_https_url, HttpMethod, HttpRequest, PendingHttp};
 use crate::ram::*;
 use crate::tokens::*;
 
@@ -851,6 +852,44 @@ impl Machine {
             self.put_chr(b'\n');
         }
         Ok(())
+    }
+
+    /// GET url (ichigocrate 拡張): `url` (文字列またはそのアドレス) へ HTTPS の GET を
+    /// 発行し、応答が届くまで実行を止める。応答の扱いは Session が行う
+    /// (即時実行ならキー入力として流し込み、プログラム実行中なら画面へ出力)。
+    pub(super) fn command_get(&mut self) -> BResult<()> {
+        let addr = self.eval_expression()?;
+        self.expect_statement_end()?;
+        let url = parse_https_url(self.ram_string(addr)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
+        let Some(client) = self.http_client.as_mut() else {
+            return Err(ERR_NETWORK_ERROR);
+        };
+        let id = self.http_next_id;
+        self.http_next_id = id.wrapping_add(1);
+        client.start(HttpRequest {
+            id,
+            method: HttpMethod::Get,
+            url,
+        });
+        self.http_pending = Some(PendingHttp {
+            id,
+            feeds_input: !self.pc_in_list(),
+        });
+        Ok(())
+    }
+
+    /// 仮想アドレス `addr` から `"` か NUL の手前までのバイト列 (文字列リテラル本体)。
+    fn ram_string(&self, addr: i16) -> BResult<&[u8]> {
+        let start = (addr as u16 as usize)
+            .checked_sub(OFFSET_RAMROM)
+            .filter(|&p| p < SIZE_RAM)
+            .ok_or(ERR_ILLEGAL_ARGUMENT)?;
+        let rest = &self.ram[start..SIZE_RAM];
+        let len = rest
+            .iter()
+            .position(|&c| c == b'"' || c == 0)
+            .unwrap_or(rest.len());
+        Ok(&rest[..len])
     }
 
     pub(super) fn command_help(&mut self) -> BResult<()> {

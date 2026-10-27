@@ -31,6 +31,16 @@ cargo run --release -p ichigocrate-app
 
 `SAVE n` / `LOAD n` / `FILES` はホスト OS の `~/.ichigocrate/slot_NN.ijb` (NN はスロット番号 0-15) に LIST 領域のバイナリを直接読み書きする (`core::machine::Storage` の `DiskStorage` 実装)。
 
+## GET (HTTPS 通信)
+
+ichigocrate 拡張の `GET` ([core の説明](../core/README.md#get-https-通信)) は、`ureq` で通信する (`src/http.rs`)。リクエストごとにスレッドで通信するので UI は固まらない。内部ネットワークへ到達させないため、次のようにしている。
+
+- 証明書は ureq 同梱の公開ルート証明書 (webpki-roots) だけで検証し、OS の証明書ストアは使わない (社内 CA のサービスにつながらないように)
+- 名前解決の結果が 1 つでも内部ネットワークのアドレスなら接続しない。検査したアドレスへそのまま接続するので、検査後に名前を引き直してすり替える攻撃 (DNS リバインディング) も効かない
+- リダイレクトは追わず、OS・環境変数のプロキシ設定も使わない
+
+実際の通信を伴うテストは既定では実行しない (`cargo test -p ichigocrate-app -- --ignored` で実行)。
+
 ## 実装メモ
 
 - **キー入力**: 物理キー位置 (`Event::Key.physical_key`) を USB HID Usage ID へ変換し、`core::keymap` の US/JA 表 (元 C ファーム `hid.h` 由来) を引いて IchigoJam 内部コードに翻訳する。OS のレイアウト変換を経由しないため `KBD` コマンドの効果が実入力に反映される

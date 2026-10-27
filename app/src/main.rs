@@ -3,8 +3,11 @@
 //! - VRAM を画像化して描画
 //! - キーボード入力を IchigoJam の制御コードに変換してマシンに渡す
 //! - PSG の現在周波数を矩形波として cpal で再生
+//! - ichigocrate 拡張 `GET` の HTTPS 通信 ([`http`])
 
 #![deny(unsafe_code)]
+
+mod http;
 
 use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Arc};
@@ -170,6 +173,7 @@ impl IchigoApp {
     ) -> Self {
         let mut machine = Machine::new();
         machine.set_storage(Box::new(DiskStorage::new()));
+        machine.set_http_client(Box::new(http::NativeHttpClient::new()));
         Self {
             session: Session::new(machine),
             renderer: Renderer::new(),

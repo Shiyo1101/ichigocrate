@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 
 use crate::errors::BasicError;
 use crate::font::CHAR_PATTERN_JP;
+use crate::net::{HttpClient, PendingHttp};
 use crate::ram::*;
 
 pub const PC_NULL: usize = usize::MAX;
@@ -161,6 +162,13 @@ pub struct Machine {
 
     /// ホスト側ストレージ (デスクトップではディスク)。None なら File error。
     pub(crate) storage: Option<Box<dyn Storage>>,
+
+    /// ホスト側の HTTPS クライアント (ichigocrate 拡張の `GET` 用)。None なら Network error。
+    pub(crate) http_client: Option<Box<dyn HttpClient>>,
+    /// `GET` の応答待ち中のリクエスト。
+    pub(crate) http_pending: Option<PendingHttp>,
+    /// 次に発行するリクエストの番号。古い応答を取り違えないよう RESET 後も引き継ぐ。
+    pub(crate) http_next_id: u32,
 }
 
 /// SAVE/LOAD/FILES のホスト側実装。デスクトップアプリは実ファイル、
@@ -261,6 +269,9 @@ impl Machine {
             current_tone_hz: 0.0,
             wait_frames: 0,
             storage: None,
+            http_client: None,
+            http_pending: None,
+            http_next_id: 0,
         };
         m.basic_init();
         m
@@ -269,6 +280,16 @@ impl Machine {
     /// ストレージ実装を差し込む (デスクトップアプリは DiskStorage)。
     pub fn set_storage(&mut self, storage: Box<dyn Storage>) {
         self.storage = Some(storage);
+    }
+
+    /// ichigocrate 拡張の `GET` が使う HTTPS クライアントを設定する。
+    pub fn set_http_client(&mut self, client: Box<dyn HttpClient>) {
+        self.http_client = Some(client);
+    }
+
+    /// `GET` の応答待ち中か。応答の受け取りは [`crate::session::Session`] が行う。
+    pub fn is_awaiting_network(&self) -> bool {
+        self.http_pending.is_some()
     }
 
     // ---- 乱数 ----
@@ -431,8 +452,12 @@ impl Machine {
     /// 提供する外部リセット API はどちらもこの一箇所に集約する。
     pub fn power_on_reset(&mut self) {
         let storage = self.storage.take();
+        let http_client = self.http_client.take();
+        let http_next_id = self.http_next_id;
         *self = Self::new();
         self.storage = storage;
+        self.http_client = http_client;
+        self.http_next_id = http_next_id;
 
         // `OK\n` は呼び出し元の文脈で出し方が異なる (BASIC の RESET 実行時は
         // 既存の "Execute → OK" 表示に任せ、ホスト起動時/外部リセット API では

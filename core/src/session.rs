@@ -1,6 +1,6 @@
 //! ホスト共通のセッション駆動層。
 //!
-//! REPL・プログラム実行・INPUT 対話・WAIT・60Hz tick からなる実行状態機械を
+//! REPL・プログラム実行・INPUT 対話・WAIT・`GET` の応答待ち・60Hz tick からなる実行状態機械を
 //! ここに集約する。ネイティブ (egui) / Web (wasm) のフロントエンドは
 //! 「キーイベントの変換」「描画」「音声」「ストレージ実装」だけを持ち、
 //! 状態遷移はすべて [`Session`] のメソッドを通す。
@@ -12,10 +12,13 @@
 //! 時刻はミリ秒 (`f64`) で外部から注入する。ネイティブは起動からの経過 ms、
 //! Web は `performance.now()` をそのまま渡せばよい。
 
+use std::collections::VecDeque;
+
 use crate::errors::BasicError;
 use crate::keycodes as kc;
 use crate::keymap::HID_CAPS_LOCK;
 use crate::machine::{BasicResult, Machine, PC_NULL};
+use crate::net::{HttpCompletion, HttpError, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS};
 use crate::ram::{OFFSET_RAM_VRAM, SIZE_RAM_VRAM};
 use crate::{exec_line_bytes, LineOutcome};
 
@@ -87,6 +90,10 @@ pub struct Session {
     next_tick_ms: Option<f64>,
     /// WAIT の実時間終了予定時刻 (ms)。
     wait_until_ms: Option<f64>,
+    /// `GET` の応答待ちを始めた時刻 (ms)。タイムアウト判定に使う。
+    http_started_ms: Option<f64>,
+    /// 即時実行の `GET` で受け取り、キー入力として流し込む残りのバイト列。
+    pending_feed: VecDeque<u8>,
 }
 
 impl Session {
@@ -99,6 +106,8 @@ impl Session {
             suppress_next_ok: false,
             next_tick_ms: None,
             wait_until_ms: None,
+            http_started_ms: None,
+            pending_feed: VecDeque::new(),
         };
         session.reset();
         session
@@ -127,6 +136,8 @@ impl Session {
         self.input_origin = None;
         self.suppress_next_ok = false;
         self.wait_until_ms = None;
+        self.http_started_ms = None;
+        self.pending_feed.clear();
     }
 
     /// 実行中プログラムの中断要求 (ESC 相当)。次の step で Break になる。
@@ -167,11 +178,17 @@ impl Session {
 
         self.machine.is_program_running = self.is_running;
 
-        let err = if self.is_running && self.wait_until_ms.is_none() {
-            self.step_chunk()
-        } else {
-            None
-        };
+        let mut err = self.poll_network(now_ms);
+        if err.is_none()
+            && self.is_running
+            && self.wait_until_ms.is_none()
+            && !self.machine.is_awaiting_network()
+        {
+            err = self.step_chunk();
+        }
+        // REPL へ戻ったら、GET で受け取った応答をキー入力として流し込む。
+        let feed_err = self.feed_pending_input();
+        let err = err.or(feed_err);
 
         // 待機 (REPL) 中はカーソルを表示し挿入モードを同期する。毎フレーム
         // 行わないと、コマンド実行後に次のキー入力まで点滅カーソルが出ない。
@@ -199,6 +216,7 @@ impl Session {
     /// 入力を破棄して REPL へ戻る。
     pub fn on_escape(&mut self) {
         self.machine.is_esc_pressed = true;
+        self.pending_feed.clear();
         if self.input_origin.is_some() {
             self.cancel_input();
         }
@@ -357,6 +375,9 @@ impl Session {
             if self.machine.wait_frames > 0 {
                 break; // ステップ中に WAIT 発火 → 次フレームへ
             }
+            if self.machine.is_awaiting_network() {
+                break; // GET の応答待ち → tick で応答を受け取ってから再開
+            }
             if let Some(res) = self.machine.basic_step() {
                 self.is_running = false;
                 self.machine.is_esc_pressed = false;
@@ -381,6 +402,102 @@ impl Session {
             }
         }
         None
+    }
+
+    /// `GET` の応答待ちを処理する。応答が届けば受け渡して実行を再開させ、
+    /// 失敗・タイムアウト・ESC なら実行を止めてその理由を返す。
+    fn poll_network(&mut self, now_ms: f64) -> Option<BasicError> {
+        let pending = self.machine.http_pending?;
+        if self.machine.is_esc_pressed {
+            return Some(self.abort_network(pending.id, BasicError::Break));
+        }
+        let started = *self.http_started_ms.get_or_insert(now_ms);
+        let completion = self.take_completion(pending.id);
+        let Some(completion) = completion else {
+            if now_ms - started >= REQUEST_TIMEOUT_MS {
+                return Some(self.abort_network(pending.id, BasicError::NetworkError));
+            }
+            return None;
+        };
+        let body = match completion.result {
+            Ok(response) if response.body.len() <= MAX_RESPONSE_BYTES => response.body,
+            Ok(_) | Err(HttpError::Failed | HttpError::TooLarge) => {
+                return Some(self.abort_network(pending.id, BasicError::NetworkError));
+            }
+        };
+        self.machine.http_pending = None;
+        self.http_started_ms = None;
+        // 応答は解釈しない。CR だけは捨てる (CRLF の応答で改行が二重にならないように)。
+        let body = body.into_iter().filter(|&b| b != b'\r');
+        if pending.feeds_input {
+            self.pending_feed.extend(body);
+        } else {
+            for b in body {
+                self.machine.put_chr(b);
+            }
+        }
+        None
+    }
+
+    /// ホストから届いた結果のうち、リクエスト `id` のものを取り出す。
+    /// 取り消し済みの古いリクエストの結果は読み捨てる。
+    fn take_completion(&mut self, id: u32) -> Option<HttpCompletion> {
+        let client = self.machine.http_client.as_mut()?;
+        while let Some(completion) = client.poll() {
+            if completion.id == id {
+                return Some(completion);
+            }
+        }
+        None
+    }
+
+    /// 応答待ちを打ち切り、`err` で実行を止める (エラーメッセージを表示する)。
+    fn abort_network(&mut self, id: u32, err: BasicError) -> BasicError {
+        if let Some(client) = self.machine.http_client.as_mut() {
+            client.cancel(id);
+        }
+        self.machine.http_pending = None;
+        self.http_started_ms = None;
+        self.pending_feed.clear();
+        self.machine.last_error = Some(err);
+        self.machine.basic_print_error(err);
+        self.is_running = false;
+        self.machine.is_program_running = false;
+        self.machine.is_esc_pressed = false;
+        err
+    }
+
+    /// `GET` の応答を、利用者が打ち込んだのと同じようにキー入力として流し込む。
+    ///
+    /// REPL で待機している間だけ流し、改行ごとに Enter を押した扱いにする。行番号付きの
+    /// 行は LIST に登録され、それ以外の行はその場で実行される。流した行がプログラムを
+    /// 走らせたり INPUT 待ちに入ったりしたら中断し、REPL へ戻ってから続きを流す。
+    /// 各行は画面上の行を消してから書き込む (画面に残った文字が行に混ざらないように)。
+    fn feed_pending_input(&mut self) -> Option<BasicError> {
+        let mut first_err = None;
+        let mut at_line_start = true;
+        while !self.is_running && self.input_origin.is_none() && !self.machine.is_awaiting_network()
+        {
+            let Some(b) = self.pending_feed.pop_front() else {
+                break;
+            };
+            if b == b'\n' {
+                first_err = first_err.or(self.on_enter());
+                at_line_start = true;
+                continue;
+            }
+            // 改行以外の制御コードは画面編集の操作になってしまうので流さない。
+            if b < b' ' {
+                continue;
+            }
+            self.sync_before_input();
+            if std::mem::take(&mut at_line_start) {
+                self.machine.screen_clear_line();
+            }
+            // ローマ字カナ変換を通さず、受け取ったバイトをそのまま書く。
+            self.machine.screen_putc(b);
+        }
+        first_err
     }
 
     /// INPUT 入力待ちの開始。プロンプトは表示済みなので、現在のカーソル位置

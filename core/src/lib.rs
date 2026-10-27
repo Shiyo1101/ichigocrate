@@ -12,6 +12,7 @@ pub mod font;
 pub mod keycodes;
 pub mod keymap;
 pub mod machine;
+pub mod net;
 pub mod psg;
 pub mod ram;
 pub mod render;
@@ -75,14 +76,14 @@ pub fn exec_line(machine: &mut Machine, line: &str) -> Result<LineOutcome, Basic
 }
 
 /// テスト/ヘッドレス用: プログラム実行を同期的に最後まで進める。
-/// `wait_frames` は無視され (即時進行)、ESC 押下や PC == NULL で終了。
+/// `wait_frames` は無視され (即時進行)、ESC 押下や PC == NULL、`GET` の応答待ちで終了。
 pub fn run_to_completion(machine: &mut Machine) {
     while machine.pc != PC_NULL {
         machine.wait_frames = 0;
         if machine.basic_step().is_some() {
             break;
         }
-        if machine.is_break_requested() {
+        if machine.is_break_requested() || machine.is_awaiting_network() {
             break;
         }
     }
