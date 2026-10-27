@@ -149,6 +149,29 @@ fn rnd_stays_in_range() {
     assert_eq!((var(&m, b'A'), var(&m, b'B')), (0, 0));
 }
 
+/// ASC は PEEK の別名。文字列リテラルはそのアドレスに評価されるので先頭文字の
+/// コードを返す。空文字列では閉じ `"` (34) を読む (元ファーム準拠)。
+#[test]
+fn asc_returns_first_char_code() {
+    assert_eq!(eval("ASC(\"A\")"), 65);
+    assert_eq!(eval("ASC(\"ABC\")"), 65);
+    assert_eq!(eval("ASC(\"\")"), 34);
+    assert_eq!(eval("ASC(#700)"), eval("PEEK(#700)"));
+}
+
+/// USR は機械語を実行せず常に 0 を返す (PC 向け元ファームと同じ)。第 2 引数は省略可。
+#[test]
+fn usr_returns_zero_without_executing() {
+    assert_eq!(eval("USR(#700)"), 0);
+    assert_eq!(eval("USR(#700,5)"), 0);
+    let mut m = Machine::new();
+    assert_eq!(
+        exec_line(&mut m, "A=USR(#700,1,2)"),
+        Err(BasicError::SyntaxError)
+    );
+    assert_eq!(exec_line(&mut m, "A=USR()"), Err(BasicError::SyntaxError));
+}
+
 #[test]
 fn len_counts_string_literal() {
     assert_eq!(eval("LEN(\"ABC\")"), 3);

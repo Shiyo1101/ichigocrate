@@ -2,7 +2,7 @@
 //!
 //! - 言語: 日本語フォント版 (LANG_JP)
 //! - バージョン: 1.4.3 ベース
-//! - 非対応: GPIO/アナログ入力 (OUT/CLO/IN/ANA)、USR、IoT 拡張、FLASH 保存
+//! - 非対応: GPIO/アナログ入力 (OUT/CLO/IN/ANA)、機械語の実行 (USR は常に 0)、IoT 拡張、FLASH 保存
 
 #![deny(unsafe_code)]
 
