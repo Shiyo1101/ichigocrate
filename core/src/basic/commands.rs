@@ -343,7 +343,7 @@ impl Machine {
         Ok(())
     }
 
-    // ---- 入出力 (画面, 変数, ピクセル, GPIO no-op) ----
+    // ---- 入出力 (画面, 変数, ピクセル) ----
 
     pub(super) fn command_print(&mut self) -> BResult<()> {
         let mut retflg = true;
@@ -506,21 +506,6 @@ impl Machine {
     pub(super) fn command_led(&mut self) -> BResult<()> {
         let n = self.eval_expression()?;
         self.is_led_on = n != 0;
-        self.expect_statement_end()
-    }
-
-    pub(super) fn command_out(&mut self) -> BResult<()> {
-        self.eval_expression()?;
-        let code = self.token_get().code;
-        if code != TOKEN_COMMA {
-            self.token_back();
-        } else {
-            self.eval_expression()?;
-        }
-        self.expect_statement_end()
-    }
-
-    pub(super) fn command_clo(&mut self) -> BResult<()> {
         self.expect_statement_end()
     }
 
