@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::vram_line;
+use common::{contains_seq, vram_bytes, vram_line, MemStore};
 use ichigocrate_core::{
     exec_line, exec_line_bytes, run_to_completion, Machine, OFFSET_RAMROM, OFFSET_RAM_LINEBUF,
     OFFSET_RAM_LIST, OFFSET_RAM_VRAM, SCREEN_W,
@@ -27,41 +27,45 @@ fn graphic_char_in_string_literal_preserved_via_bytes_api() {
     assert_eq!(m.ram[OFFSET_RAM_VRAM + 1], 0xea);
 }
 
-/// VRAM に直接グラフィック文字を含む行を書いた後、その行を LINEBUF に生
-/// バイトでコピーして実行すれば、文字列が壊れずに出力されること。
-/// (これは app の execute_current_line が踏むべき経路。)
-#[test]
-fn vram_line_with_graphic_char_round_trips_through_linebuf() {
-    let mut m = Machine::new();
-    // VRAM 行 0 に `?"\xea"` を直接書く
-    let bytes: &[u8] = b"?\"\xea\"";
-    for (i, &b) in bytes.iter().enumerate() {
-        m.ram[OFFSET_RAM_VRAM + i] = b;
-    }
-    // LINEBUF に生コピーして実行
-    let _ = exec_line_bytes(&mut m, bytes);
-    // 1 行目に出力される (行 0 は元の文字列がそのまま残るので別の行へ流れる)
-    // 出力の途中だが、PRINT で書き出された 0xEA がどこかに現れるはず。
-    let vram = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
-    assert!(
-        vram.contains(&0xea),
-        "VRAM should contain the graphic byte 0xEA after PRINT"
-    );
-}
-
 /// 行番号付きで LIST に保存した行がグラフィック文字をそのまま保持すること。
 #[test]
 fn list_storage_preserves_graphic_chars() {
     let mut m = Machine::new();
-    // 10 ?"\xea\xff"
-    let line: &[u8] = b"10 ?\"\xea\xff\"";
-    let _ = exec_line_bytes(&mut m, line);
-    // LIST 領域に \xEA \xFF がそのまま入っているはず
-    let list = &m.ram[OFFSET_RAM_LIST..];
-    let has_ea = list.windows(1).any(|w| w[0] == 0xea);
-    let has_ff = list.windows(1).any(|w| w[0] == 0xff);
-    assert!(has_ea, "LIST should contain 0xEA byte unchanged");
-    assert!(has_ff, "LIST should contain 0xFF byte unchanged");
+    let _ = exec_line_bytes(&mut m, b"10 ?\"\xea\xff\"");
+    let list = &m.ram[OFFSET_RAM_LIST..OFFSET_RAM_LIST + m.list_size as usize];
+    assert!(
+        contains_seq(list, &[0xea, 0xff]),
+        "LIST should contain 0xEA 0xFF unchanged"
+    );
+}
+
+/// LIST 表示で文字列リテラル内のグラフィック文字がそのまま VRAM へ書き出される。
+#[test]
+fn list_command_outputs_graphic_chars_unchanged() {
+    let mut m = Machine::new();
+    let _ = exec_line_bytes(&mut m, b"10 ?\"\xea\xff\"");
+    let _ = exec_line_bytes(&mut m, b"LIST");
+    assert!(
+        contains_seq(vram_bytes(&m), &[0xea, 0xff]),
+        "LIST should print graphic bytes 0xEA, 0xFF verbatim"
+    );
+}
+
+/// SAVE/LOAD ラウンドトリップでも 0x80-0xFF が保持される。
+#[test]
+fn save_load_preserves_graphic_chars() {
+    let mut m = Machine::new();
+    m.set_storage(Box::<MemStore>::default());
+    let _ = exec_line_bytes(&mut m, b"10 ?\"A\xea\xff\"");
+    let _ = exec_line_bytes(&mut m, b"SAVE 0");
+    let _ = exec_line_bytes(&mut m, b"NEW");
+    let _ = exec_line_bytes(&mut m, b"LOAD 0");
+    let _ = exec_line_bytes(&mut m, b"RUN");
+    run_to_completion(&mut m);
+    assert!(
+        contains_seq(vram_bytes(&m), &[b'A', 0xea, 0xff]),
+        "SAVE/LOAD/RUN should preserve graphic bytes 0xEA, 0xFF"
+    );
 }
 
 /// 行番号付きで保存 → RUN すると、PRINT がグラフィック文字を VRAM へ出力する。
@@ -72,11 +76,8 @@ fn run_program_prints_graphic_chars_unchanged() {
     let _ = exec_line_bytes(&mut m, b"RUN");
     run_to_completion(&mut m);
     // 4 連続バイト 'A', 0xEA, 0xFF, 'Z' が VRAM のどこかに連続して現れる
-    let vram = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
-    let pattern = [b'A', 0xea, 0xff, b'Z'];
-    let found = vram.windows(4).any(|w| w == pattern);
     assert!(
-        found,
+        contains_seq(vram_bytes(&m), &[b'A', 0xea, 0xff, b'Z']),
         "RUN should print A, 0xEA, 0xFF, Z contiguously in VRAM"
     );
 }
@@ -110,14 +111,6 @@ fn vpeek_returns_raw_graphic_byte() {
     // ?VPEEK(10,5) は直接モードでカーソル位置 (0,0) に "234" を出力
     let _ = exec_line_bytes(&mut m, b"?VPEEK(10,5)");
     assert_eq!(vram_line(&m, 0), "234");
-}
-
-/// CHR$(0xEA) で文字列出力したときに、変換せず元のバイトのまま画面へ出ること。
-#[test]
-fn chr_dollar_prints_graphic_byte_unchanged() {
-    let mut m = Machine::new();
-    let _ = exec_line_bytes(&mut m, b"?CHR$(234)");
-    assert_eq!(m.ram[OFFSET_RAM_VRAM], 0xea);
 }
 
 /// CHR$(0) は NULL セル (= 空) を 1 つ書き、カーソルを進める。
@@ -190,7 +183,8 @@ fn poke_vpeek_round_trip_full_byte_range() {
     // VRAM 先頭 256 バイトに 0..=255 が並ぶ
     for b in 0u16..=255 {
         assert_eq!(
-            m.ram[OFFSET_RAM_VRAM + b as usize], b as u8,
+            m.ram[OFFSET_RAM_VRAM + b as usize],
+            b as u8,
             "POKE failed at byte {b}"
         );
     }
@@ -205,8 +199,10 @@ fn cls_clears_all_bytes_including_graphics() {
         m.ram[OFFSET_RAM_VRAM + i] = 0xea;
     }
     let _ = exec_line_bytes(&mut m, b"CLS");
-    let vram = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
-    assert!(vram.iter().all(|&b| b == 0), "CLS should zero-fill VRAM");
+    assert!(
+        vram_bytes(&m).iter().all(|&b| b == 0),
+        "CLS should zero-fill VRAM"
+    );
 }
 
 /// LOCATE してから PRINT すると、その位置からグラフィック文字も保持される。

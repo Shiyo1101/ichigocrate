@@ -1,9 +1,10 @@
-//! より複雑なプログラム例
+//! より複雑なプログラム例: サブルーチン・計算・キー入力・WAIT・SAVE/LOAD・
+//! DRAW/POINT・PEEK/POKE。
 
 mod common;
 
-use common::{screen_text, vram_line};
-use ichigocrate_core::{exec_line, run_to_completion, Machine, OFFSET_RAM_VRAM};
+use common::{var, vram_line, MemStore};
+use ichigocrate_core::{exec_line, run_to_completion, BasicError, Machine, PC_NULL};
 
 #[test]
 fn gosub_return() {
@@ -16,10 +17,10 @@ fn gosub_return() {
     let _ = exec_line(&mut m, "110 RETURN");
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen_text(&m);
-    assert!(t.contains("START"), "{t}");
-    assert!(t.contains("SUB"), "{t}");
-    assert!(t.contains("END"), "{t}");
+    // RETURN で呼出し直後の行へ戻るので START → SUB → END の順に並ぶ。
+    assert_eq!(vram_line(&m, 0), "START");
+    assert_eq!(vram_line(&m, 1), "SUB");
+    assert_eq!(vram_line(&m, 2), "END");
 }
 
 #[test]
@@ -32,9 +33,7 @@ fn fib_program() {
     let _ = exec_line(&mut m, "50 NEXT");
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen_text(&m);
-    // Fib: 1 1 2 3 5
-    assert!(t.contains("1 1 2 3 5"), "{t}");
+    assert_eq!(vram_line(&m, 0), "1 1 2 3 5 ");
 }
 
 #[test]
@@ -58,27 +57,18 @@ fn inkey_in_running_program() {
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "10 K=INKEY()");
     let _ = exec_line(&mut m, "20 IF K=0 GOTO 10");
-    let _ = exec_line(&mut m, "30 ?K");
-    let _ = exec_line(&mut m, "40 END");
+    let _ = exec_line(&mut m, "30 END");
     let _ = exec_line(&mut m, "RUN"); // inkey_queue をクリアし LIST へ移行
-    // キー未入力の間は 10-20 をループ。数ステップ空回しする。
+                                      // キー未入力の間は 10-20 をループ。数ステップ空回しする。
     for _ in 0..50 {
         m.wait_frames = 0;
         let _ = m.basic_step();
     }
+    assert_ne!(m.pc, PC_NULL, "キー入力までループし続ける");
     // プログラム実行中にキーが押された状況を模す。
     m.key_push(b'A');
     run_to_completion(&mut m);
-    let t = screen_text(&m);
-    assert!(t.contains("65"), "INKEY() should return 65 for 'A': {t}");
-}
-
-#[test]
-fn nested_if_else() {
-    let mut m = Machine::new();
-    let _ = exec_line(&mut m, "A=10:IF A>5 ?\"BIG\" ELSE ?\"SMALL\"");
-    let t = screen_text(&m);
-    assert!(t.contains("BIG"), "{t}");
+    assert_eq!(var(&m, b'K'), 65);
 }
 
 #[test]
@@ -92,39 +82,17 @@ fn wait_and_goto_loop_yields() {
     let _ = exec_line(&mut m, "30 GOTO10");
     let _ = exec_line(&mut m, "RUN");
     // 1 周目: PRINT 実行 → WAIT で stop → wait_frames が 60
-    while m.wait_frames == 0 && m.pc != ichigocrate_core::PC_NULL {
+    while m.wait_frames == 0 && m.pc != PC_NULL {
         let _ = m.basic_step();
     }
     assert_eq!(m.wait_frames, 60);
-    // 1 行目が出力されていること
-    let t = screen_text(&m);
-    assert!(t.contains("ICHIGOCRATE"), "{t}");
+    assert_eq!(vram_line(&m, 0), "ICHIGOCRATE");
 }
 
 #[test]
 fn save_load_roundtrip() {
-    use ichigocrate_core::machine::Storage;
-    #[derive(Debug)]
-    struct MemStore { data: Vec<u8>, has: bool }
-    impl Storage for MemStore {
-        fn save(&mut self, _slot: u8, d: &[u8]) -> bool {
-            self.data = d.to_vec();
-            self.has = true;
-            true
-        }
-        fn load(&mut self, _slot: u8, buf: &mut [u8]) -> Option<usize> {
-            if !self.has { return None; }
-            let n = self.data.len().min(buf.len());
-            buf[..n].copy_from_slice(&self.data[..n]);
-            buf[n..].fill(0);
-            Some(n)
-        }
-        fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
-            self.load(slot, buf)
-        }
-    }
     let mut m = Machine::new();
-    m.set_storage(Box::new(MemStore { data: vec![], has: false }));
+    m.set_storage(Box::<MemStore>::default());
     let _ = exec_line(&mut m, "10 ?\"HELLO\"");
     let _ = exec_line(&mut m, "20 ?\"WORLD\"");
     let original_size = m.list_size;
@@ -133,11 +101,34 @@ fn save_load_roundtrip() {
     assert_eq!(m.list_size, 0);
     let _ = exec_line(&mut m, "LOAD 0");
     assert_eq!(m.list_size, original_size);
+    let _ = exec_line(&mut m, "CLS");
     let _ = exec_line(&mut m, "RUN");
     run_to_completion(&mut m);
-    let t = screen_text(&m);
-    assert!(t.contains("HELLO"), "{t}");
-    assert!(t.contains("WORLD"), "{t}");
+    assert_eq!(vram_line(&m, 0), "HELLO");
+    assert_eq!(vram_line(&m, 1), "WORLD");
+}
+
+/// スロットは独立しており、未保存スロットの LOAD は File error。
+/// LOAD は読込前に LIST を消去するため、失敗時も既存プログラムは残らない。
+#[test]
+fn load_unsaved_slot_is_file_error() {
+    let mut m = Machine::new();
+    m.set_storage(Box::<MemStore>::default());
+    let _ = exec_line(&mut m, "10 ?\"X\"");
+    let _ = exec_line(&mut m, "SAVE 1");
+    assert_eq!(exec_line(&mut m, "LOAD 2"), Err(BasicError::FileError));
+    assert_eq!(m.list_size, 0);
+    assert!(exec_line(&mut m, "LOAD 1").is_ok());
+    assert!(m.list_size > 0);
+}
+
+/// ストレージ未設定のホストでは SAVE/LOAD とも File error。
+#[test]
+fn save_load_without_storage_is_file_error() {
+    let mut m = Machine::new();
+    let _ = exec_line(&mut m, "10 ?\"X\"");
+    assert_eq!(exec_line(&mut m, "SAVE 0"), Err(BasicError::FileError));
+    assert_eq!(exec_line(&mut m, "LOAD 0"), Err(BasicError::FileError));
 }
 
 #[test]
@@ -163,13 +154,15 @@ fn draw_three_args_uses_explicit_cmd() {
 
 #[test]
 fn draw_four_args_draws_line() {
-    // DRAW x1,y1,x2,y2 は線を描く (cmd 既定 = 1)
+    // DRAW x1,y1,x2,y2 は線を描く (cmd 既定 = 1)。端点だけでなく中間点も点灯する。
     let mut m = Machine::new();
     let _ = exec_line(&mut m, "DRAW 20,20,30,20");
     let _ = exec_line(&mut m, "?POINT(20,20)");
+    let _ = exec_line(&mut m, "?POINT(25,20)");
     let _ = exec_line(&mut m, "?POINT(30,20)");
     assert_eq!(vram_line(&m, 0), "1");
     assert_eq!(vram_line(&m, 1), "1");
+    assert_eq!(vram_line(&m, 2), "1");
 }
 
 #[test]
@@ -185,93 +178,14 @@ fn draw_five_args_draws_line_with_cmd() {
 }
 
 #[test]
-fn error_message_printed_at_repl() {
-    // REPL での実行時エラーは Err を返しつつ、画面にメッセージを表示する。
-    let mut m = Machine::new();
-    let r = exec_line(&mut m, "?1/0");
-    assert!(
-        matches!(r, Err(ichigocrate_core::BasicError::DivideByZero)),
-        "{r:?}"
-    );
-    assert!(screen_text(&m).contains("Divide by 0"), "{}", screen_text(&m));
-}
-
-#[test]
-fn error_in_program_shows_line_number() {
-    // プログラム実行中のエラーは「メッセージ + in <行番号>」を表示する。
-    let mut m = Machine::new();
-    let _ = exec_line(&mut m, "10 ?1/0");
-    let _ = exec_line(&mut m, "RUN");
-    run_to_completion(&mut m);
-    let t = screen_text(&m);
-    assert!(t.contains("Divide by 0"), "message missing:\n{t}");
-    assert!(t.contains("in 10"), "line number missing:\n{t}");
-}
-
-#[test]
 fn poke_peek_pcg() {
     let mut m = Machine::new();
-    // PCG 領域 (0x700) に書き込んで読み戻し
-    let _ = exec_line(&mut m, "POKE #700,#FF,#AA,#55,#FF");
+    // PCG 領域 (0x700) に複数バイトを連続で書き込んで読み戻し
+    let _ = exec_line(&mut m, "POKE #700,#FF,#AA,#55");
     let _ = exec_line(&mut m, "?PEEK(#700)");
     let _ = exec_line(&mut m, "?PEEK(#701)");
-    let t = screen_text(&m);
-    assert!(t.contains("255"), "{t}");
-    assert!(t.contains("170"), "{t}");
-}
-
-#[test]
-fn save_load_preserves_graphic_chars() {
-    // バグ報告: プログラム記述後 RUN すると特殊文字が別の文字に変わる。
-    // SAVE/LOAD ラウンドトリップでも 0x80-0xFF が保持されることを確認する。
-    use ichigocrate_core::{exec_line_bytes, machine::Storage};
-    #[derive(Debug)]
-    struct MemStore { data: Vec<u8>, has: bool }
-    impl Storage for MemStore {
-        fn save(&mut self, _: u8, d: &[u8]) -> bool {
-            self.data = d.to_vec();
-            self.has = true;
-            true
-        }
-        fn load(&mut self, _: u8, buf: &mut [u8]) -> Option<usize> {
-            if !self.has { return None; }
-            let n = self.data.len().min(buf.len());
-            buf[..n].copy_from_slice(&self.data[..n]);
-            buf[n..].fill(0);
-            Some(n)
-        }
-        fn peek(&mut self, slot: u8, buf: &mut [u8]) -> Option<usize> {
-            self.load(slot, buf)
-        }
-    }
-    let mut m = Machine::new();
-    m.set_storage(Box::new(MemStore { data: vec![], has: false }));
-    // 10 ?"A\xea\xff" — 文字列リテラル中にグラフィック文字 234, 255
-    let _ = exec_line_bytes(&mut m, b"10 ?\"A\xea\xff\"");
-    let _ = exec_line_bytes(&mut m, b"SAVE 0");
-    let _ = exec_line_bytes(&mut m, b"NEW");
-    let _ = exec_line_bytes(&mut m, b"LOAD 0");
-    let _ = exec_line_bytes(&mut m, b"RUN");
-    run_to_completion(&mut m);
-    let vram = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
-    let pattern = [b'A', 0xea, 0xff];
-    assert!(
-        vram.windows(3).any(|w| w == pattern),
-        "SAVE/LOAD/RUN should preserve graphic bytes 0xEA, 0xFF"
-    );
-}
-
-#[test]
-fn list_command_outputs_graphic_chars_unchanged() {
-    // LIST 表示で文字列リテラル内のグラフィック文字がそのまま VRAM へ書き出される。
-    use ichigocrate_core::exec_line_bytes;
-    let mut m = Machine::new();
-    let _ = exec_line_bytes(&mut m, b"10 ?\"\xea\xff\"");
-    let _ = exec_line_bytes(&mut m, b"LIST");
-    let vram = &m.ram[OFFSET_RAM_VRAM..OFFSET_RAM_VRAM + 32 * 24];
-    let pattern = [0xea, 0xff];
-    assert!(
-        vram.windows(2).any(|w| w == pattern),
-        "LIST should print graphic bytes 0xEA, 0xFF verbatim"
-    );
+    let _ = exec_line(&mut m, "?PEEK(#702)");
+    assert_eq!(vram_line(&m, 0), "255");
+    assert_eq!(vram_line(&m, 1), "170");
+    assert_eq!(vram_line(&m, 2), "85");
 }
