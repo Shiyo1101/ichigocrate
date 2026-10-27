@@ -169,6 +169,22 @@ pub struct Machine {
     pub(crate) http_pending: Option<PendingHttp>,
     /// 次に発行するリクエストの番号。古い応答を取り違えないよう RESET 後も引き継ぐ。
     pub(crate) http_next_id: u32,
+
+    /// 画面 1 枚分を表示して一時停止中の LIST の続き。
+    pub(crate) list_cursor: Option<ListCursor>,
+}
+
+/// 一時停止中の LIST の続き (元ファームの `IJB_DONT_LOOP` 版 `command_list_next` 相当)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ListCursor {
+    /// 次に表示する行の LIST 内オフセット。
+    pub(crate) index: u16,
+    /// 前回の一時停止以降に表示した画面の行数。
+    pub(crate) rows: i32,
+    pub(crate) min: i16,
+    pub(crate) max: i32,
+    /// `index` の行は一時停止の直前に行数を数え済みで、再開後そのまま表示する。
+    pub(crate) counted: bool,
 }
 
 /// SAVE/LOAD/FILES のホスト側実装。デスクトップアプリは実ファイル、
@@ -272,6 +288,7 @@ impl Machine {
             http_client: None,
             http_pending: None,
             http_next_id: 0,
+            list_cursor: None,
         };
         m.basic_init();
         m

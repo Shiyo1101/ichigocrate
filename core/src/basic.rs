@@ -33,6 +33,7 @@ impl Machine {
         self.pc = commandline_pc;
         self.last_token_start_pc = 0;
         self.last_token_end_pc = 0;
+        self.list_cursor = None;
     }
 
     /// 1 文ぶんだけ実行する。返り値が `Some` なら停止 (理由付き)、`None`
@@ -56,6 +57,16 @@ impl Machine {
     fn step_once(&mut self) -> BResult<Option<BasicResult>> {
         // GET の応答待ち中は先へ進めない (応答の処理は Session が行う)。
         if self.is_awaiting_network() {
+            return Ok(None);
+        }
+        // ESC は次の文を実行する前に効かせる (WAIT や LIST の一時停止中に押された場合も)。
+        if self.is_break_requested() {
+            self.list_cursor = None;
+            return Err(ERR_BREAK);
+        }
+        // 一時停止していた LIST の続きを表示する。
+        if self.list_cursor.is_some() {
+            self.list_continue()?;
             return Ok(None);
         }
         if self.pc == PC_NULL {

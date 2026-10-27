@@ -39,7 +39,8 @@ core/
 
 - RESET — `Machine::power_on_reset` に委譲。LED・カナ入力・VIDEO 設定・PSG・乱数シードなど電源断で失われる状態も初期化する (SAVE/LOAD のストレージのみ保持)。ホストの外部リセット API ([web](../web) の `IchigoCrateHandle.reset()` 等) も同じ関数を使う
 - INPUT — `Session` 経由なら Enter (`on_enter`) で値が確定し、ESC (`on_escape`) で中断される。`Machine` を直接使う場合は `is_awaiting_input` で入力待ちを検知し、確定行を `input_complete` へ渡す
-- WAIT — 実時間での待機は `Session` が管理する ([アーキテクチャ要点](#アーキテクチャ要点) 参照)
+- WAIT — 実時間での待機は `Session` が管理する ([アーキテクチャ要点](#アーキテクチャ要点) 参照)。実機と同じく ESC で待機を打ち切って中断する
+- LIST — 画面に収まらない量は、画面 1 枚分 (画面の行数 - 1) ごとに 40 フレーム (約 0.67 秒) 止めながら表示する。ESC で中断できる (実機と同じ)
 - ASC — 元ファーム同様 PEEK の別名。文字列リテラルは自身のアドレスに評価されるため `ASC("A")` は 65 になる
 - LED — 状態を `Machine` に保持するのみで、点灯の表現はホスト側の責務
 - VIDEO — 拡大時は `screen_cols()` / `screen_rows()` 自体が縮む (`32/24 >> 拡大段階`) ため、ホスト側も折り返しやカーソル範囲の計算にこの値を使う。clkdiv 引数 (実機の省電力用クロック分周) は読み飛ばす

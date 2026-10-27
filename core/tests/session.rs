@@ -265,3 +265,101 @@ fn reset_restores_caps_on() {
     s.reset();
     assert!(s.machine.is_caps_on);
 }
+
+/// 画面の各行 (0..24) を文字列で返す。
+fn screen_lines(s: &Session) -> Vec<String> {
+    (0..24).map(|y| vram_line(&s.machine, y)).collect()
+}
+
+/// 1 行ずつ `n*10 ?n` (n=1..=count) を登録する。
+fn store_lines(s: &mut Session, count: i32) {
+    for n in 1..=count {
+        let _ = s.exec_line(format!("{} ?{n}", n * 10).as_bytes());
+    }
+}
+
+/// 画面に収まらない LIST は、画面 1 枚分ずつ間を置いて表示する (元ファームと同じく
+/// 画面の行数 - 1 に達する手前で 40 フレーム待つ)。
+#[test]
+fn long_list_pauses_between_pages() {
+    let mut s = new_session();
+    store_lines(&mut s, 40);
+    type_str(&mut s, "LIST");
+    assert_eq!(s.on_enter(), None);
+    assert!(s.is_running(), "1 枚目を表示して一時停止する");
+    // 入力行 ("LIST") の下に 22 行表示したところで止まる
+    let lines = screen_lines(&s);
+    let first = lines
+        .iter()
+        .position(|l| l == "10 ?1")
+        .expect("1 行目が見えている");
+    assert_eq!(lines[first - 1], "LIST");
+    assert_eq!(lines[first + 21], "220 ?22");
+    assert!(!lines.iter().any(|l| l == "230 ?23"), "{lines:?}");
+
+    // 待機 (40 フレーム) が明けるまでは続きを出さない
+    assert_eq!(s.tick(0.0), None);
+    assert_eq!(s.tick(30.0 * FRAME_MS), None);
+    assert!(!screen_lines(&s).iter().any(|l| l == "230 ?23"));
+
+    let mut t_ms = 30.0 * FRAME_MS;
+    while s.is_running() {
+        t_ms += FRAME_MS;
+        assert_eq!(s.tick(t_ms), None);
+        assert!(t_ms < 10_000.0, "LIST が終わらない");
+    }
+    let lines = screen_lines(&s);
+    let last = lines
+        .iter()
+        .position(|l| l == "400 ?40")
+        .expect("最終行まで表示する");
+    assert_eq!(lines[last + 1], "OK");
+}
+
+/// 一時停止中の ESC で LIST を中断する (Break)。
+#[test]
+fn escape_stops_paged_list() {
+    let mut s = new_session();
+    store_lines(&mut s, 40);
+    type_str(&mut s, "LIST");
+    let _ = s.on_enter();
+    assert!(s.is_running());
+    assert_eq!(s.tick(0.0), None);
+    s.on_escape();
+    assert_eq!(s.tick(FRAME_MS), Some(BasicError::Break));
+    assert!(!s.is_running());
+    let lines = screen_lines(&s);
+    assert!(lines.iter().any(|l| l == "Break"), "{lines:?}");
+    assert!(!lines.iter().any(|l| l == "230 ?23"), "{lines:?}");
+}
+
+/// 画面に収まる LIST は待たずに一度で表示する。
+#[test]
+fn short_list_does_not_pause() {
+    let mut s = new_session();
+    store_lines(&mut s, 5);
+    type_str(&mut s, "LIST");
+    assert_eq!(s.on_enter(), None);
+    assert!(!s.is_running());
+    let lines = screen_lines(&s);
+    let last = lines
+        .iter()
+        .position(|l| l == "50 ?5")
+        .expect("全行を表示する");
+    assert_eq!(lines[last + 1], "OK");
+}
+
+/// WAIT 中の ESC は待機の終了を待たずに中断する (実機の IJB_wait と同じ)。
+#[test]
+fn escape_interrupts_wait_immediately() {
+    let mut s = new_session();
+    let _ = s.exec_line(b"10 WAIT 600");
+    let _ = s.exec_line(b"20 ?\"AFTER\"");
+    let _ = s.exec_line(b"RUN");
+    assert_eq!(s.tick(0.0), None);
+    assert!(s.is_waiting());
+    s.on_escape();
+    assert_eq!(s.tick(FRAME_MS), Some(BasicError::Break));
+    assert!(!s.is_running());
+    assert!(!screen_text(&s.machine).contains("AFTER"));
+}
