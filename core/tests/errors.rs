@@ -48,11 +48,19 @@ fn runtime_errors_report_expected_kind() {
     }
 }
 
-/// 実機の GPIO・アナログ入力に相当する命令は未対応のため、
+/// 実機の GPIO・アナログ入力・機械語呼び出しに相当する命令は未対応のため、
 /// 何もせず通すのではなく Syntax error にする。
 #[test]
 fn unsupported_hardware_io_is_syntax_error() {
-    for src in ["OUT 1,1", "OUT 1", "CLO", "A=IN(1)", "A=IN()", "A=ANA(2)"] {
+    for src in [
+        "OUT 1,1",
+        "OUT 1",
+        "CLO",
+        "A=IN(1)",
+        "A=IN()",
+        "A=ANA(2)",
+        "A=USR(#700,0)",
+    ] {
         let mut m = Machine::new();
         assert_eq!(
             exec_line(&mut m, src),

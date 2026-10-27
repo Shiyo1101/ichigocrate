@@ -308,18 +308,6 @@ impl Machine {
                     Ok(self.screen_get(v as i32, v2 as i32) as i16)
                 }
             }
-            TOKEN_USR => {
-                // USR(addr[,n]): 実機は RAM 上の機械語を呼ぶが、PC 向けの元ファーム
-                // (console 版) と同様に実行はせず常に 0 を返す。引数の構文だけは検査する。
-                self.eval_expression()?;
-                if self.token_get().code == TOKEN_COMMA {
-                    self.eval_expression()?;
-                } else {
-                    self.token_back();
-                }
-                self.expect_paren_close()?;
-                Ok(0)
-            }
             TOKEN_STRING => {
                 let p = self.skip_string_literal();
                 Ok((p as i32 + OFFSET_RAMROM as i32) as i16)
