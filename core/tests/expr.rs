@@ -149,6 +149,16 @@ fn rnd_stays_in_range() {
     assert_eq!((var(&m, b'A'), var(&m, b'B')), (0, 0));
 }
 
+/// ASC は PEEK の別名。文字列リテラルはそのアドレスに評価されるので先頭文字の
+/// コードを返す。空文字列では閉じ `"` (34) を読む (元ファーム準拠)。
+#[test]
+fn asc_returns_first_char_code() {
+    assert_eq!(eval("ASC(\"A\")"), 65);
+    assert_eq!(eval("ASC(\"ABC\")"), 65);
+    assert_eq!(eval("ASC(\"\")"), 34);
+    assert_eq!(eval("ASC(#700)"), eval("PEEK(#700)"));
+}
+
 #[test]
 fn len_counts_string_literal() {
     assert_eq!(eval("LEN(\"ABC\")"), 3);

@@ -278,6 +278,8 @@ impl Machine {
                 let n = self.eval_paren_arg()?;
                 Ok(self.random(n))
             }
+            // TOKEN_PEEK_1 は "ASC(" の綴り。文字列リテラルは RAM 上のアドレスに評価されるため
+            // ASC("A") は PEEK と同じ処理で先頭文字のコードになる (元ファーム準拠)。
             TOKEN_PEEK_1 | TOKEN_PEEK_2 => {
                 let v = self.eval_paren_arg()?;
                 Ok(self.peek(v as i32) as i16)
