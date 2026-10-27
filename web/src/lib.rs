@@ -11,7 +11,9 @@
 //! - [`keymap`]: `KeyboardEvent.code` から HID / BTN コードへの変換。
 //! - [`output`]: onPrint 用の VRAM 差分ヘルパ。
 //! - [`storage`]: SAVE/LOAD/FILES の localStorage 実装。
+//! - [`http`]: ichigocrate 拡張 `GET` の fetch 実装。
 
+mod http;
 mod keymap;
 mod output;
 mod runner;

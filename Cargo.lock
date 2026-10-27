@@ -1178,11 +1178,12 @@ dependencies = [
 name = "ichigocrate-web"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "console_error_panic_hook",
  "ichigocrate-core",
  "js-sys",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
