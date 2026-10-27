@@ -25,8 +25,10 @@ fn error_code_round_trip() {
         let e = BasicError::from_code(code).expect("1..=12 は定義済み");
         assert_eq!(e.code(), code);
     }
+    // 13 は ichigocrate 拡張 (Network error)
+    assert_eq!(BasicError::from_code(13).map(BasicError::code), Some(13));
     assert_eq!(BasicError::from_code(0), None);
-    assert_eq!(BasicError::from_code(13), None);
+    assert_eq!(BasicError::from_code(14), None);
 }
 
 #[test]

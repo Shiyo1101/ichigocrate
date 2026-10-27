@@ -4,7 +4,7 @@
 //! BASIC エラー型と内部伝搬用の Result 別名。
 //!
 //! メッセージ文言は `Display` で出力する (thiserror が生成)。
-//! 数値コードは IchigoJam 標準と互換 (1..=12)。
+//! 数値コードは IchigoJam 標準と互換 (1..=12)。13 以降は ichigocrate 独自の拡張。
 
 use thiserror::Error;
 
@@ -36,10 +36,13 @@ pub enum BasicError {
     IllegalArgument,
     #[error("Break")]
     Break,
+    /// ichigocrate 拡張: `GET` の通信失敗 (接続不可・タイムアウト・上限超過など)。
+    #[error("Network error")]
+    NetworkError,
 }
 
 impl BasicError {
-    /// IchigoJam 標準の番号 (1..=12)。`Machine.err` の値と対応。
+    /// IchigoJam 標準の番号 (1..=12) と、ichigocrate 拡張の番号 (13..)。
     pub const fn code(self) -> u8 {
         match self {
             Self::SyntaxError => 1,
@@ -54,6 +57,7 @@ impl BasicError {
             Self::ComplexExpression => 10,
             Self::IllegalArgument => 11,
             Self::Break => 12,
+            Self::NetworkError => 13,
         }
     }
 
@@ -72,6 +76,7 @@ impl BasicError {
             10 => Some(Self::ComplexExpression),
             11 => Some(Self::IllegalArgument),
             12 => Some(Self::Break),
+            13 => Some(Self::NetworkError),
             _ => None,
         }
     }
@@ -91,3 +96,4 @@ pub(crate) const ERR_INDEX_OUT_OF_RANGE: BasicError = BasicError::IndexOutOfRang
 pub(crate) const ERR_FILE_ERROR: BasicError = BasicError::FileError;
 pub(crate) const ERR_ILLEGAL_ARGUMENT: BasicError = BasicError::IllegalArgument;
 pub(crate) const ERR_BREAK: BasicError = BasicError::Break;
+pub(crate) const ERR_NETWORK_ERROR: BasicError = BasicError::NetworkError;

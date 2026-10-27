@@ -9,7 +9,8 @@ core/
 ├── src/
 │   ├── lib.rs           # 公開 API + exec_line / exec_line_bytes
 │   ├── machine.rs       # Machine 構造体 (元 GLOBAL + RAM) と Storage トレイト
-│   ├── session.rs       # ホスト共通の実行状態機械 (REPL / RUN / INPUT / WAIT / 60Hz tick)
+│   ├── session.rs       # ホスト共通の実行状態機械 (REPL / RUN / INPUT / WAIT / GET / 60Hz tick)
+│   ├── net.rs           # ichigocrate 拡張 GET: URL 検証・HttpClient トレイト・接続先の判定
 │   ├── basic.rs         # 実行ループと文のディスパッチ
 │   ├── basic/           # tokenizer / expr (式評価) / commands (各文) / sin
 │   ├── screen.rs        # VRAM 操作 + ピクセル描画
@@ -20,7 +21,7 @@ core/
 │   ├── keymap.rs        # HID キーコード → ASCII 変換表 (US/JA)
 │   ├── romajikana.rs    # ローマ字 → 半角カナ変換
 │   ├── tokens.rs        # トークン定義 (v1.4.3)
-│   ├── errors.rs        # BASIC エラー型 (IchigoJam 標準のエラー番号互換)
+│   ├── errors.rs        # BASIC エラー型 (IchigoJam 標準のエラー番号互換 + 拡張)
 │   └── font.rs          # 日本語フォント (256 文字 × 8x8)
 └── tests/                # 機能別結合テスト (common ヘルパー共有)
 ```
@@ -51,13 +52,43 @@ core/
 - コマンド: OUT, CLO, PWM, DAC, UART, BPS, SLEEP, IOT.OUT, WS.LED
 - 関数: IN, ANA, USR, I2CR, I2CW, IOT.IN
 
+## ichigocrate 独自拡張
+
+### GET (HTTPS 通信)
+
+```basic
+GET "https://kidspod.club/mj/2245"
+```
+
+指定した URL へ HTTPS で GET を送り、届いたレスポンスを解釈せずにそのまま扱う。URL は文字列リテラルのほか、文字列を置いた RAM のアドレスでも渡せる。
+
+- 即時実行 (REPL で直接打ったとき) — レスポンスをキー入力として流し込む。改行ごとに Enter を押した扱いになるので、行番号付きの行はプログラムとして登録され、それ以外の行はその場で実行される ([kidspod](https://kidspod.club/) の `/mj/<プログラムID>` からプログラムを取り込める)
+- プログラム実行中 — レスポンスを画面へ出力し、次の文へ進む
+- レスポンスが届くまで実行は止まる。ESC で中断できる (Break)
+- CR (`\r`) は捨てる。HTTP のステータスが 404 などでも本文はそのまま扱う
+
+制限と安全のための仕様:
+
+- https のみ。`https://` で始まらない URL は Illegal argument
+- 内部ネットワーク (ループバック・プライベート・リンクローカルなど) へはつながない。URL に直接書かれた IP アドレスや `localhost` は core が Illegal argument にし、名前解決後の検査は各フロントエンドが行う
+- レスポンスは 2KB (`net::MAX_RESPONSE_BYTES`) まで、応答待ちは 10 秒 (`net::REQUEST_TIMEOUT_MS`) まで。超えた場合や通信に失敗した場合は Network error
+- リダイレクトは追わず、Cookie・認証情報は送らない
+
+通信そのものはホストが `net::HttpClient` を実装して `Machine::set_http_client` で設定する。未設定なら Network error。
+
+### 拡張エラー
+
+| 番号 | メッセージ    | 内容                                              |
+| ---- | ------------- | ------------------------------------------------- |
+| 13   | Network error | GET の通信失敗 (接続不可・タイムアウト・上限超過) |
+
 ## テスト
 
 ```bash
 cargo test -p ichigocrate-core
 ```
 
-テストは `tests/` 以下に機能別のファイルとして置き (式評価・エラー・制御構文・コマンド・画面編集・描画・セッションなど)、共通ヘルパーは `tests/common/mod.rs` にまとめている。キー変換表 (`keymap.rs`) やローマ字カナ変換 (`romajikana.rs`) の単体テストは各モジュール内にある。
+テストは `tests/` 以下に機能別のファイルとして置き (式評価・エラー・制御構文・コマンド・画面編集・描画・セッション・通信など)、共通ヘルパーは `tests/common/mod.rs` にまとめている。キー変換表 (`keymap.rs`) やローマ字カナ変換 (`romajikana.rs`) の単体テストは各モジュール内にある。
 
 ## アーキテクチャ要点
 

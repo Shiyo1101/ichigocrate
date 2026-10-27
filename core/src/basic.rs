@@ -54,6 +54,10 @@ impl Machine {
     /// 1 文を実行する内部本体。`Ok(Some(_))` で停止、`Ok(None)` で継続、
     /// `Err(_)` でエラー/中断。
     fn step_once(&mut self) -> BResult<Option<BasicResult>> {
+        // GET の応答待ち中は先へ進めない (応答の処理は Session が行う)。
+        if self.is_awaiting_network() {
+            return Ok(None);
+        }
         if self.pc == PC_NULL {
             return Ok(Some(BasicResult::Execute));
         }
@@ -114,7 +118,7 @@ impl Machine {
             if let Some(r) = self.basic_step() {
                 return r;
             }
-            if self.wait_frames > 0 {
+            if self.wait_frames > 0 || self.is_awaiting_network() {
                 return BasicResult::Execute;
             }
             // 即時入力 → プログラム実行への遷移を検知
@@ -196,6 +200,7 @@ impl Machine {
             TOKEN_SAVE => self.command_save()?,
             TOKEN_FILES => self.command_files()?,
             TOKEN_HELP => self.command_help()?,
+            TOKEN_GET => self.command_get()?,
             _ => return Err(ERR_SYNTAX_ERROR),
         }
         Ok(())
