@@ -307,9 +307,10 @@ impl Machine {
         self.http_client = Some(client);
     }
 
-    /// `GET` の応答待ち中か。応答の受け取りは [`crate::session::Session`] が行う。
+    /// `GET` / `POST` の応答を待って実行を止めているか (`NET GET` / `NET POST` の
+    /// 通信中は止めないので含まない)。応答の受け取りは [`crate::session::Session`] が行う。
     pub fn is_awaiting_network(&self) -> bool {
-        self.http_pending.is_some()
+        self.http_pending.is_some_and(|p| p.wait)
     }
 
     // ---- 乱数 ----

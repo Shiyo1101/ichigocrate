@@ -1,6 +1,6 @@
 //! ichigocrate 拡張 `GET` / `POST` のテスト: URL の検証、応答待ち、応答の受け渡し
 //! (即時実行はキー入力として流し込み、プログラム実行中は画面へ出力)、
-//! メモリ (NET 領域) への書き込みと `NET()`、失敗・タイムアウト・ESC による中断、
+//! メモリ (NET 領域) への書き込みと `NET()`、待たずに進む `NET GET` / `NET POST`、失敗・タイムアウト・ESC による中断、
 //! どんな応答でも異常終了しないこと。
 
 mod common;
@@ -576,6 +576,197 @@ fn net_function_in_expressions() {
     assert_eq!(var(&m, b'B'), 5);
 }
 
+/// 即時実行で `NET()` の値を読む。
+fn net_value(s: &mut Session) -> i16 {
+    let _ = type_line(s, "Z=NET()");
+    var(&s.machine, b'Z')
+}
+
+/// tick を `frames` フレーム分進める。
+fn advance(s: &mut Session, t: &mut f64, frames: usize) {
+    for _ in 0..frames {
+        *t += FRAME_MS;
+        let _ = s.tick(*t);
+    }
+}
+
+/// NET GET は応答を待たずに次の文へ進み、通信中は NET() が -1。届けばメモリへ書き込み、
+/// NET() が長さになる。
+#[test]
+fn net_get_continues_without_waiting() {
+    let (mut s, http) = new_session();
+    run_program(
+        &mut s,
+        &["10 NET GET \"https://a.jp/\",#1200,100", "20 A=NET()"],
+    );
+    let mut t = 0.0;
+    advance(&mut s, &mut t, 1);
+    assert!(!s.is_running(), "応答を待たずに最後まで進む");
+    assert_eq!(var(&s.machine, b'A'), -1);
+    assert_eq!(http.requests().len(), 1);
+    assert_eq!(net_value(&mut s), -1, "REPL に戻っても通信は続く");
+
+    http.respond(b"D3");
+    advance(&mut s, &mut t, 1);
+    assert_eq!(net_value(&mut s), 2);
+    assert_eq!(s.machine.peek(NET), b'D');
+    assert_eq!(s.machine.peek(NET + 2), 0);
+}
+
+/// ゲームのループを回しながら結果を待てる。
+#[test]
+fn net_get_in_game_loop() {
+    let (mut s, http) = new_session();
+    run_program(
+        &mut s,
+        &[
+            "5 CLS",
+            "10 NET POST \"https://a.jp/\",\"M3\",#1200,100",
+            "20 C=C+1:IF NET()=-1 GOTO 20",
+            "30 ?STR$(#1200)",
+        ],
+    );
+    assert_eq!(
+        http.requests()[0].method,
+        HttpMethod::Post {
+            body: b"M3".to_vec()
+        }
+    );
+    let mut t = 0.0;
+    advance(&mut s, &mut t, 5);
+    assert!(s.is_running(), "ループが回り続ける");
+    http.respond(b"YOUR TURN");
+    advance(&mut s, &mut t, 3);
+    assert!(!s.is_running());
+    assert!(var(&s.machine, b'C') > 1);
+    assert_eq!(vram_line(&s.machine, 0).trim_end(), "YOUR TURN");
+}
+
+/// 失敗してもプログラムは止めず、NET() が -2 になる。メモリは変えず、何も表示しない。
+#[test]
+fn net_get_failures_set_minus_two() {
+    for result in [
+        Err(HttpError::Failed),
+        Ok(HttpResponse {
+            status: 404,
+            body: b"NOT FOUND".to_vec(),
+        }),
+        // 書き込み先 (3 バイト) に入りきらない
+        Ok(HttpResponse {
+            status: 200,
+            body: b"ABCD".to_vec(),
+        }),
+    ] {
+        let (mut s, http) = new_session();
+        run_program(
+            &mut s,
+            &[
+                "5 CLS:POKE #1200,7",
+                "10 NET GET \"https://a.jp/\",#1200,3",
+                "20 IF NET()=-1 GOTO 20",
+                "30 A=NET()",
+            ],
+        );
+        let mut t = 0.0;
+        advance(&mut s, &mut t, 2);
+        http.complete(result);
+        advance(&mut s, &mut t, 3);
+        assert!(!s.is_running());
+        assert_eq!(s.machine.last_error(), None, "エラーで止めない");
+        assert_eq!(var(&s.machine, b'A'), -2);
+        assert_eq!(s.machine.peek(NET), 7);
+        let screen = screen_text(&s.machine);
+        assert!(
+            !screen.contains("HTTP") && !screen.contains("error"),
+            "{screen}"
+        );
+    }
+}
+
+/// 応答が来ないまま時間が過ぎたら取り消して NET() を -2 にする。
+#[test]
+fn net_get_timeout_sets_minus_two() {
+    let (mut s, http) = new_session();
+    let _ = type_line(&mut s, "NET GET \"https://a.jp/\",#1200,10");
+    assert_eq!(s.tick(0.0), None);
+    assert_eq!(s.tick(REQUEST_TIMEOUT_MS - 1.0), None);
+    assert_eq!(net_value(&mut s), -1);
+    assert_eq!(s.tick(REQUEST_TIMEOUT_MS), None, "エラーにはしない");
+    assert_eq!(net_value(&mut s), -2);
+    assert_eq!(http.0.borrow().cancelled, vec![0]);
+}
+
+/// 通信中に次のリクエストを出すと、前のものは取り消され、遅れて届いた結果は捨てる。
+#[test]
+fn new_request_replaces_running_one() {
+    let (mut s, http) = new_session();
+    let _ = type_line(&mut s, "NET GET \"https://a.jp/1\",#1200,10");
+    let _ = type_line(&mut s, "NET GET \"https://a.jp/2\",#1200,10");
+    assert_eq!(http.0.borrow().cancelled, vec![0]);
+    // 1 つ目の結果が遅れて届いても使わない
+    http.0.borrow_mut().completions.push_back(HttpCompletion {
+        id: 0,
+        result: Ok(HttpResponse {
+            status: 200,
+            body: b"OLD".to_vec(),
+        }),
+    });
+    let _ = s.tick(0.0);
+    assert_eq!(net_value(&mut s), -1);
+    http.respond(b"NEW");
+    let _ = s.tick(FRAME_MS);
+    assert_eq!(net_value(&mut s), 3);
+    assert_eq!(s.machine.peek(NET), b'N');
+
+    // 待つ GET を出すと、通信中の NET GET は取り消されて NET() は -2 になる
+    let _ = type_line(&mut s, "NET GET \"https://a.jp/3\",#1200,10");
+    let _ = type_line(&mut s, "GET \"https://a.jp/4\"");
+    assert_eq!(http.0.borrow().cancelled, vec![0, 2]);
+    assert!(s.is_running(), "待つ GET は応答を待つ");
+    http.respond(b"");
+    let _ = s.tick(2.0 * FRAME_MS);
+    assert_eq!(net_value(&mut s), -2);
+}
+
+/// ESC でプログラムを止めても NET GET の通信は続き、結果は書き込まれる。
+#[test]
+fn escape_does_not_cancel_net_get() {
+    let (mut s, http) = new_session();
+    run_program(
+        &mut s,
+        &["10 NET GET \"https://a.jp/\",#1200,10", "20 GOTO 20"],
+    );
+    let mut t = 0.0;
+    advance(&mut s, &mut t, 1);
+    s.on_escape();
+    advance(&mut s, &mut t, 1);
+    assert!(!s.is_running());
+    assert!(http.0.borrow().cancelled.is_empty());
+    http.respond(b"OK");
+    advance(&mut s, &mut t, 1);
+    assert_eq!(net_value(&mut s), 2);
+}
+
+/// NET の後ろは GET / POST だけで、書き込み先が必須。
+#[test]
+fn net_statement_requires_destination() {
+    let (mut s, http) = new_session();
+    for line in [
+        "NET GET \"https://a.jp/\"",
+        "NET POST \"https://a.jp/\",\"X\"",
+        "NET POST \"https://a.jp/\",#800,2",
+        "NET LIST",
+        "NET",
+    ] {
+        assert_eq!(
+            type_line(&mut s, line),
+            Some(BasicError::SyntaxError),
+            "{line}"
+        );
+    }
+    assert!(http.requests().is_empty());
+}
+
 /// 決まった種から擬似乱数列を作る (xorshift64)。テストを再現可能にするため外部クレートは使わない。
 fn xorshift(mut seed: u64) -> impl FnMut() -> u64 {
     move || {
@@ -587,7 +778,7 @@ fn xorshift(mut seed: u64) -> impl FnMut() -> u64 {
 }
 
 /// どんな応答 (最大 2KB の任意のバイト列) を受け取っても、即時実行での流し込み・
-/// 実行中の画面出力・メモリへの書き込みのどれでも異常終了 (パニック) しない。応答はサーバー側が
+/// 実行中の画面出力・メモリへの書き込み (待つ・待たない) のどれでも異常終了 (パニック) しない。応答はサーバー側が
 /// 自由に決められるので、ホスト側の安全はこれに依存する。
 #[test]
 fn arbitrary_responses_never_panic() {
@@ -607,7 +798,7 @@ fn arbitrary_responses_never_panic() {
                 }
             })
             .collect();
-        for mode in ["immediate", "program", "memory"] {
+        for mode in ["immediate", "program", "memory", "background"] {
             let http = MockHttp::default();
             let mut m = Machine::new();
             m.set_http_client(Box::new(http.clone()));
@@ -618,7 +809,8 @@ fn arbitrary_responses_never_panic() {
                     let _ = type_line(&mut s, "GET \"https://example.com/\"");
                 }
                 "program" => run_program(&mut s, &["10 GET \"https://example.com/\""]),
-                _ => run_program(&mut s, &["10 GET \"https://example.com/\",#1200,2048"]),
+                "memory" => run_program(&mut s, &["10 GET \"https://example.com/\",#1200,2048"]),
+                _ => run_program(&mut s, &["10 NET GET \"https://example.com/\",#1200,2048"]),
             }
             http.respond(&body);
             let mut t = 0.0;

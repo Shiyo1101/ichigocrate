@@ -211,8 +211,9 @@ impl Machine {
             TOKEN_SAVE => self.command_save()?,
             TOKEN_FILES => self.command_files()?,
             TOKEN_HELP => self.command_help()?,
-            TOKEN_GET => self.command_get()?,
-            TOKEN_POST => self.command_post()?,
+            TOKEN_GET => self.command_get(true)?,
+            TOKEN_POST => self.command_post(true)?,
+            TOKEN_NET => self.command_net()?,
             _ => return Err(ERR_SYNTAX_ERROR),
         }
         Ok(())
