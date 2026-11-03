@@ -17,7 +17,8 @@ Cargo ワークスペースとして 3 つのクレートに分かれている�
 ichigocrate/
 ├── core/   # BASIC インタプリタ本体 (ichigocrate-core)                 → core/README.md
 ├── app/    # egui デスクトップフロントエンド (ichigocrate-app)          → app/README.md
-└── web/    # WebAssembly フロントエンド (ichigocrate-web)               → web/README.md
+├── web/    # WebAssembly フロントエンド (ichigocrate-web)               → web/README.md
+└── samples/ # BASIC プログラムのサンプル集 (ネット対戦など)             → samples/README.md
 ```
 
 `core` の描画は `render.rs` (1bpp ビットマップ生成) に集約され、デスクトップ (egui) と Web (canvas 2D) の両フロントエンドが同じラスタライズ結果を共有する。
