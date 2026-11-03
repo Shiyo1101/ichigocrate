@@ -12,6 +12,7 @@ use crate::errors::*;
 use crate::machine::{calc_div, calc_mod, strlen8, ListCursor, Machine, PC_NULL};
 use crate::net::{
     parse_https_url, HttpMethod, HttpRequest, PendingHttp, ResponseSink, MAX_REQUEST_BYTES,
+    NET_FAILED, NET_PENDING,
 };
 use crate::ram::*;
 use crate::tokens::*;
@@ -901,23 +902,25 @@ impl Machine {
     /// HTTPS の GET を発行し、応答が届くまで実行を止める。書き込み先を書くと応答を
     /// そこへ書き込み、省くと即時実行ならキー入力として流し込み、プログラム実行中なら
     /// 画面へ出力する (応答の処理は Session が行う)。
-    pub(super) fn command_get(&mut self) -> BResult<()> {
+    ///
+    /// `wait` が偽 (`NET GET`) なら応答を待たずに次の文へ進む。書き込み先が必須。
+    pub(super) fn command_get(&mut self, wait: bool) -> BResult<()> {
         let url = self.eval_expression()?;
         let args = self.parse_rest_args()?;
         let url = parse_https_url(self.ram_string(url)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
         let sink = match *args.as_slice() {
-            [] => self.default_sink(),
+            [] if wait => self.default_sink(),
             [dst, max] => memory_sink(dst, max)?,
             _ => return Err(ERR_SYNTAX_ERROR),
         };
-        self.start_http(url, HttpMethod::Get, sink)
+        self.start_http(url, HttpMethod::Get, sink, wait)
     }
 
     /// POST url,本文[,書き込み先,最大長] (ichigocrate 拡張): `url` へ HTTPS の POST を発行する。
     /// 本文は `"文字列"` (またはそのアドレス) か `アドレス,長さ` (生のバイト列)。
     /// 引数の数で区別する (1 つ・3 つなら文字列、2 つ・4 つならバイト列)。
-    /// 応答の扱いは GET と同じ。
-    pub(super) fn command_post(&mut self) -> BResult<()> {
+    /// 応答の扱いは GET と同じ (`wait` が偽なら `NET POST`)。
+    pub(super) fn command_post(&mut self, wait: bool) -> BResult<()> {
         let url = self.eval_expression()?;
         let args = self.parse_rest_args()?;
         let url = parse_https_url(self.ram_string(url)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
@@ -933,10 +936,22 @@ impl Machine {
         }
         let body = body.to_vec();
         let sink = match sink {
-            None => self.default_sink(),
+            None if wait => self.default_sink(),
+            None => return Err(ERR_SYNTAX_ERROR),
             Some((dst, max)) => memory_sink(dst, max)?,
         };
-        self.start_http(url, HttpMethod::Post { body }, sink)
+        self.start_http(url, HttpMethod::Post { body }, sink, wait)
+    }
+
+    /// NET GET ... / NET POST ... (ichigocrate 拡張): 応答を待たずに次の文へ進む GET / POST。
+    /// 書き込み先 (`,書き込み先,最大長`) が必須。通信中は `NET()` が -1 になり、終われば
+    /// 書き込んだ長さ、失敗すれば -2 になる。失敗してもプログラムは止めない。
+    pub(super) fn command_net(&mut self) -> BResult<()> {
+        match self.token_get().code {
+            TOKEN_GET => self.command_get(false),
+            TOKEN_POST => self.command_post(false),
+            _ => Err(ERR_SYNTAX_ERROR),
+        }
     }
 
     /// `,式` の並びを文末まで読む (最初の引数の後ろ)。
@@ -959,15 +974,29 @@ impl Machine {
         }
     }
 
-    /// リクエストをホストへ渡し、応答待ちにする。
-    fn start_http(&mut self, url: String, method: HttpMethod, sink: ResponseSink) -> BResult<()> {
+    /// リクエストをホストへ渡し、応答待ちにする。リクエストは同時に 1 つだけなので、
+    /// `NET GET` / `NET POST` が通信中なら取り消す (`NET()` はいったん失敗の値になる)。
+    fn start_http(
+        &mut self,
+        url: String,
+        method: HttpMethod,
+        sink: ResponseSink,
+        wait: bool,
+    ) -> BResult<()> {
         let Some(client) = self.http_client.as_mut() else {
             return Err(ERR_NETWORK_ERROR);
         };
+        if let Some(previous) = self.http_pending.take() {
+            client.cancel(previous.id);
+            self.net_received_len = NET_FAILED;
+        }
         let id = self.http_next_id;
         self.http_next_id = id.wrapping_add(1);
         client.start(HttpRequest { id, method, url });
-        self.http_pending = Some(PendingHttp { id, sink });
+        self.http_pending = Some(PendingHttp { id, sink, wait });
+        if !wait {
+            self.net_received_len = NET_PENDING;
+        }
         Ok(())
     }
 

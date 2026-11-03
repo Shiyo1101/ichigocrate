@@ -104,11 +104,20 @@ pub(crate) enum ResponseSink {
     Memory { offset: usize, max: usize },
 }
 
-/// 応答待ち中のリクエスト。
+/// `NET()` の値: `NET GET` / `NET POST` の通信中。
+pub const NET_PENDING: i16 = -1;
+/// `NET()` の値: `NET GET` / `NET POST` が失敗した (通信失敗・タイムアウト・2xx 以外の
+/// ステータス・書き込み先に入りきらない・後から出したリクエストに取って代わられた)。
+pub const NET_FAILED: i16 = -2;
+
+/// 応答待ち中のリクエスト。同時に 1 つだけ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PendingHttp {
     pub(crate) id: u32,
     pub(crate) sink: ResponseSink,
+    /// 応答が届くまでプログラムを止めるか。偽 (`NET GET` / `NET POST`) なら実行を続け、
+    /// 結果は `NET()` で知らせる。
+    pub(crate) wait: bool,
 }
 
 /// RAM 上の文字列から URL を取り出して検証する。不正なら `None`。

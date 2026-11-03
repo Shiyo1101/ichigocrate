@@ -18,7 +18,10 @@ use crate::errors::BasicError;
 use crate::keycodes as kc;
 use crate::keymap::HID_CAPS_LOCK;
 use crate::machine::{BasicResult, Machine, PC_NULL};
-use crate::net::{HttpCompletion, HttpError, ResponseSink, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS};
+use crate::net::{
+    HttpCompletion, HttpError, HttpResponse, ResponseSink, MAX_RESPONSE_BYTES, NET_FAILED,
+    REQUEST_TIMEOUT_MS,
+};
 use crate::ram::{OFFSET_RAM_VRAM, SIZE_RAM_VRAM};
 use crate::{exec_line_bytes, LineOutcome};
 
@@ -90,8 +93,8 @@ pub struct Session {
     next_tick_ms: Option<f64>,
     /// WAIT の実時間終了予定時刻 (ms)。
     wait_until_ms: Option<f64>,
-    /// `GET` の応答待ちを始めた時刻 (ms)。タイムアウト判定に使う。
-    http_started_ms: Option<f64>,
+    /// 応答待ちのリクエストの番号と、待ち始めた時刻 (ms)。タイムアウト判定に使う。
+    http_started: Option<(u32, f64)>,
     /// 即時実行の `GET` で受け取り、キー入力として流し込む残りのバイト列。
     pending_feed: VecDeque<u8>,
 }
@@ -106,7 +109,7 @@ impl Session {
             suppress_next_ok: false,
             next_tick_ms: None,
             wait_until_ms: None,
-            http_started_ms: None,
+            http_started: None,
             pending_feed: VecDeque::new(),
         };
         session.reset();
@@ -136,7 +139,7 @@ impl Session {
         self.input_origin = None;
         self.suppress_next_ok = false;
         self.wait_until_ms = None;
-        self.http_started_ms = None;
+        self.http_started = None;
         self.pending_feed.clear();
     }
 
@@ -409,50 +412,71 @@ impl Session {
         None
     }
 
-    /// `GET` の応答待ちを処理する。応答が届けば受け渡して実行を再開させ、
-    /// 失敗・タイムアウト・ESC なら実行を止めてその理由を返す。
+    /// `GET` / `POST` の応答待ちを処理する。
+    ///
+    /// 応答を待って止めている場合は、届けば受け渡して実行を再開させ、失敗・タイムアウト・
+    /// ESC なら実行を止めてその理由を返す。`NET GET` / `NET POST` (待たない) の場合は
+    /// 実行に関わらず結果を受け取り、`NET()` の値で知らせる (失敗してもエラーにしない)。
     fn poll_network(&mut self, now_ms: f64) -> Option<BasicError> {
         let pending = self.machine.http_pending?;
-        if self.machine.is_esc_pressed {
+        if pending.wait && self.machine.is_esc_pressed {
             return Some(self.abort_network(pending.id, BasicError::Break));
         }
-        let started = *self.http_started_ms.get_or_insert(now_ms);
-        let completion = self.take_completion(pending.id);
-        let Some(completion) = completion else {
-            if now_ms - started >= REQUEST_TIMEOUT_MS {
-                return Some(self.abort_network(pending.id, BasicError::NetworkError));
+        // 待たないリクエストは別のリクエストに置き換わることがあるので、番号ごとに計る
+        let started = match self.http_started {
+            Some((id, ms)) if id == pending.id => ms,
+            _ => {
+                self.http_started = Some((pending.id, now_ms));
+                now_ms
             }
-            return None;
         };
-        let body = match completion.result {
-            Ok(response) if response.body.len() > MAX_RESPONSE_BYTES => {
-                return Some(self.abort_network(pending.id, BasicError::NetworkError));
+        let (result, timed_out) = match self.take_completion(pending.id) {
+            Some(completion) => (accept_response(completion.result, pending.sink), false),
+            None if now_ms - started >= REQUEST_TIMEOUT_MS => (
+                Err(NetFailure {
+                    error: BasicError::NetworkError,
+                    status: None,
+                }),
+                true,
+            ),
+            None => return None,
+        };
+        match result {
+            Ok(body) => {
+                self.machine.http_pending = None;
+                self.http_started = None;
+                self.deliver_response(body, pending.sink);
+                None
             }
-            // 失敗の理由がわかるよう、ステータスを表示してから止める。エラーページの本文を
-            // キー入力として流し込むと無関係なエラーが出るだけなので、本文は捨てる。
-            Ok(response) if !response.is_success() => {
-                if !self.machine.is_quiet_mode {
-                    if self.machine.cursory == -1 {
-                        self.machine.cursory = 0;
+            Err(_) if !pending.wait => {
+                if timed_out {
+                    if let Some(client) = self.machine.http_client.as_mut() {
+                        client.cancel(pending.id);
                     }
-                    self.machine.put_str(&format!("HTTP {}\n", response.status));
                 }
-                return Some(self.abort_network(pending.id, BasicError::NetworkError));
+                self.machine.http_pending = None;
+                self.http_started = None;
+                self.machine.net_received_len = NET_FAILED;
+                None
             }
-            Ok(response) => response.body,
-            Err(HttpError::Failed | HttpError::TooLarge) => {
-                return Some(self.abort_network(pending.id, BasicError::NetworkError));
-            }
-        };
-        if let ResponseSink::Memory { max, .. } = pending.sink {
-            // 入りきらない応答は途中で切らずにエラーにする (切ると対戦の状態がずれる)
-            if body.len() > max {
-                return Some(self.abort_network(pending.id, BasicError::OutOfMemory));
+            Err(failure) => {
+                // 失敗の理由がわかるよう、ステータスを表示してから止める
+                if let Some(status) = failure.status {
+                    if !self.machine.is_quiet_mode {
+                        if self.machine.cursory == -1 {
+                            self.machine.cursory = 0;
+                        }
+                        self.machine.put_str(&format!("HTTP {status}\n"));
+                    }
+                }
+                Some(self.abort_network(pending.id, failure.error))
             }
         }
-        self.machine.http_pending = None;
-        self.http_started_ms = None;
-        match pending.sink {
+    }
+
+    /// 受け入れた応答を、受け取り方に応じて渡す。
+    fn deliver_response(&mut self, body: Vec<u8>, sink: ResponseSink) {
+        match sink {
             // メモリへはそのまま書く。空きがあれば NUL を付けて ?STR$() で表示できるようにする
             ResponseSink::Memory { offset, max } => {
                 self.machine.ram[offset..][..body.len()].copy_from_slice(&body);
@@ -473,7 +497,6 @@ impl Session {
                 }
             }
         }
-        None
     }
 
     /// ホストから届いた結果のうち、リクエスト `id` のものを取り出す。
@@ -494,7 +517,7 @@ impl Session {
             client.cancel(id);
         }
         self.machine.http_pending = None;
-        self.http_started_ms = None;
+        self.http_started = None;
         self.pending_feed.clear();
         self.machine.last_error = Some(err);
         self.machine.basic_print_error(err);
@@ -579,4 +602,41 @@ impl Session {
             self.machine.is_cursor_visible = true;
         }
     }
+}
+
+/// 受け入れなかった応答 (止めるときのエラーと、表示する HTTP ステータス)。
+struct NetFailure {
+    error: BasicError,
+    status: Option<u16>,
+}
+
+/// 届いた結果を受け入れるか判定し、受け入れるなら本文を返す。
+///
+/// 2xx 以外のステータスでは本文は使わない (エラーページを流し込んでも無関係なエラーが
+/// 出るだけ)。書き込み先に入りきらない応答は途中で切らない (切ると対戦の状態がずれる)。
+fn accept_response(
+    result: Result<HttpResponse, HttpError>,
+    sink: ResponseSink,
+) -> Result<Vec<u8>, NetFailure> {
+    let network_error = |status| NetFailure {
+        error: BasicError::NetworkError,
+        status,
+    };
+    // 通信失敗・本文が大きすぎる場合 (HttpError のどれでも) は Network error
+    let response = result.map_err(|_: HttpError| network_error(None))?;
+    if response.body.len() > MAX_RESPONSE_BYTES {
+        return Err(network_error(None));
+    }
+    if !response.is_success() {
+        return Err(network_error(Some(response.status)));
+    }
+    if let ResponseSink::Memory { max, .. } = sink {
+        if response.body.len() > max {
+            return Err(NetFailure {
+                error: BasicError::OutOfMemory,
+                status: None,
+            });
+        }
+    }
+    Ok(response.body)
 }
