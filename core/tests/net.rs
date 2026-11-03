@@ -1,6 +1,6 @@
 //! ichigocrate 拡張 `GET` のテスト: URL の検証、応答待ち、応答の受け渡し
 //! (即時実行はキー入力として流し込み、プログラム実行中は画面へ出力)、
-//! 失敗・タイムアウト・ESC による中断。
+//! 失敗・タイムアウト・ESC による中断、どんな応答でも異常終了しないこと。
 
 mod common;
 
@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use common::screen_text;
+use common::{screen_text, MemStore};
 use ichigocrate_core::net::{
     HttpClient, HttpCompletion, HttpError, HttpMethod, HttpRequest, HttpResponse,
     MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS,
@@ -270,4 +270,63 @@ fn url_can_be_given_by_address() {
     s.machine.ram[ichigocrate_core::ram::OFFSET_RAM_VAR..][..url.len()].copy_from_slice(url);
     let _ = type_line(&mut s, &format!("GET {addr}"));
     assert_eq!(http.requests()[0].url, "https://example.com/x");
+}
+
+/// 決まった種から擬似乱数列を作る (xorshift64)。テストを再現可能にするため外部クレートは使わない。
+fn xorshift(mut seed: u64) -> impl FnMut() -> u64 {
+    move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    }
+}
+
+/// どんな応答 (最大 2KB の任意のバイト列) を受け取っても、即時実行での流し込み・
+/// 実行中の画面出力のどちらでも異常終了 (パニック) しない。応答はサーバー側が
+/// 自由に決められるので、ホスト側の安全はこれに依存する。
+#[test]
+fn arbitrary_responses_never_panic() {
+    // 半分は完全にランダムなバイト列、半分は BASIC として解釈されやすい文字の並び
+    const BASIC_LIKE: &[u8] = b"0123456789 ?\"\n:,=+-*/()#ABCPOKERUNGOTOLISTSAVEGET";
+    let mut next = xorshift(0x1234_5678_9abc_def0);
+    let mut fed_programs = 0;
+    for round in 0..100 {
+        let len = (next() % (MAX_RESPONSE_BYTES as u64 + 1)) as usize;
+        let body: Vec<u8> = (0..len)
+            .map(|_| {
+                let r = next();
+                if round % 2 == 0 {
+                    r as u8
+                } else {
+                    BASIC_LIKE[(r % BASIC_LIKE.len() as u64) as usize]
+                }
+            })
+            .collect();
+        for in_program in [false, true] {
+            let http = MockHttp::default();
+            let mut m = Machine::new();
+            m.set_http_client(Box::new(http.clone()));
+            m.set_storage(Box::<MemStore>::default());
+            let mut s = Session::new(m);
+            if in_program {
+                run_program(&mut s, &["10 GET \"https://example.com/\""]);
+            } else {
+                let _ = type_line(&mut s, "GET \"https://example.com/\"");
+            }
+            http.respond(&body);
+            let mut t = 0.0;
+            for frame in 0..300 {
+                t += FRAME_MS;
+                let _ = s.tick(t);
+                // 流し込んだ行が無限ループや長い WAIT を走らせることがあるので途中で止める
+                if frame >= 200 {
+                    s.on_escape();
+                }
+            }
+            fed_programs += usize::from(!in_program && s.machine.list_size > 0);
+        }
+    }
+    // 流し込みが実際に行われている (応答が素通りされていない) ことの確認
+    assert!(fed_programs > 0);
 }
