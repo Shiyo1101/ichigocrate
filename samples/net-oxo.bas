@@ -1,6 +1,6 @@
 1 'OX NET MATCH
 10 CLS:?"OX NET MATCH"
-20 S="https://ichigocrate-relay.YOURNAME.workers.dev"
+20 S="https://ichigocrate-relay.ichigocrate-relay.workers.dev"
 30 INPUT"ROOM 1-9999?",R:INPUT"PLAYER 1/2?",P
 40 FOR I=0 TO 1:A=#1800+I*128:L=LEN(S):COPY A,S,L:A=A+L
 50 POKE A,47,114,47,R/1000%10+48,R/100%10+48,R/10%10+48,R%10+48,47,64+P+I*(3-2*P),0:NEXT

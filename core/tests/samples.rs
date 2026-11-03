@@ -148,7 +148,8 @@ fn net_oxo_two_players_play_to_the_end() {
     // 部屋 42 のプレイヤーごとの受信箱を使う
     let urls: Vec<String> = inboxes.borrow().keys().cloned().collect();
     for box_name in ["A", "B"] {
-        let url = format!("https://ichigocrate-relay.YOURNAME.workers.dev/r/0042/{box_name}");
+        let url =
+            format!("https://ichigocrate-relay.ichigocrate-relay.workers.dev/r/0042/{box_name}");
         assert!(urls.contains(&url), "{urls:?}");
     }
 }
