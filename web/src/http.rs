@@ -1,4 +1,4 @@
-//! Web 版の HTTPS クライアント (ichigocrate 拡張 `GET` 用の [`HttpClient`] 実装)。
+//! Web 版の HTTPS クライアント (ichigocrate 拡張 `GET` / `POST` 用の [`HttpClient`] 実装)。
 //!
 //! ブラウザの `fetch` で通信し、完了した結果をキューに積んで [`HttpClient::poll`] で返す。
 //! ブラウザからは接続先の IP を調べられないため、内部ネットワークへの到達は次で防ぐ。
@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use ichigocrate_core::net::{
     HttpClient, HttpCompletion, HttpError, HttpMethod, HttpRequest, HttpResponse,
-    MAX_RESPONSE_BYTES,
+    MAX_RESPONSE_BYTES, POST_CONTENT_TYPE,
 };
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
@@ -38,9 +38,7 @@ impl HttpClient for FetchHttpClient {
     fn start(&mut self, request: HttpRequest) {
         let completed = Rc::clone(&self.completed);
         spawn_local(async move {
-            let result = match request.method {
-                HttpMethod::Get => fetch(&request.url, "GET").await,
-            };
+            let result = fetch(&request).await;
             completed.borrow_mut().push_back(HttpCompletion {
                 id: request.id,
                 result,
@@ -53,21 +51,33 @@ impl HttpClient for FetchHttpClient {
     }
 }
 
-async fn fetch(url: &str, method: &str) -> Result<HttpResponse, HttpError> {
+async fn fetch(request: &HttpRequest) -> Result<HttpResponse, HttpError> {
     let init = RequestInit::new();
-    init.set_method(method);
+    match &request.method {
+        HttpMethod::Get => init.set_method("GET"),
+        HttpMethod::Post { body } => {
+            init.set_method("POST");
+            init.set_body_opt_u8_array(Some(&js_sys::Uint8Array::from(body.as_slice())));
+        }
+    }
     init.set_mode(RequestMode::Cors);
     init.set_credentials(RequestCredentials::Omit);
     init.set_redirect(RequestRedirect::Error);
     init.set_cache(RequestCache::NoStore);
-    let request = Request::new_with_str_and_init(url, &init).map_err(|_| HttpError::Failed)?;
-    request
-        .headers()
+    let fetch_request =
+        Request::new_with_str_and_init(&request.url, &init).map_err(|_| HttpError::Failed)?;
+    let headers = fetch_request.headers();
+    headers
         .set(PREFLIGHT_HEADER, "1")
         .map_err(|_| HttpError::Failed)?;
+    if matches!(request.method, HttpMethod::Post { .. }) {
+        headers
+            .set("Content-Type", POST_CONTENT_TYPE)
+            .map_err(|_| HttpError::Failed)?;
+    }
 
     let window = web_sys::window().ok_or(HttpError::Failed)?;
-    let response: Response = JsFuture::from(window.fetch_with_request(&request))
+    let response: Response = JsFuture::from(window.fetch_with_request(&fetch_request))
         .await
         .map_err(|_| HttpError::Failed)?
         .dyn_into()

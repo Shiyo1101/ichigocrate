@@ -1,4 +1,4 @@
-//! ネイティブ版の HTTPS クライアント (ichigocrate 拡張 `GET` 用の [`HttpClient`] 実装)。
+//! ネイティブ版の HTTPS クライアント (ichigocrate 拡張 `GET` / `POST` 用の [`HttpClient`] 実装)。
 //!
 //! リクエストごとにスレッドを起こして ureq で通信し、結果をチャネルで返すので
 //! UI は固まらない。内部ネットワークへ到達させないため、次のように接続する。
@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use ichigocrate_core::net::{
     is_internet_address, HttpClient, HttpCompletion, HttpError, HttpMethod, HttpRequest,
-    HttpResponse, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS,
+    HttpResponse, MAX_RESPONSE_BYTES, POST_CONTENT_TYPE, REQUEST_TIMEOUT_MS,
 };
 use ureq::config::Config;
 use ureq::http::Uri;
@@ -60,9 +60,7 @@ impl HttpClient for NativeHttpClient {
         let agent = self.agent.clone();
         let tx = self.tx.clone();
         thread::spawn(move || {
-            let result = match request.method {
-                HttpMethod::Get => get(&agent, &request.url),
-            };
+            let result = send(&agent, &request);
             // 受け手 (Session) が先に破棄されていれば結果は不要なので無視する。
             let _ = tx.send(HttpCompletion {
                 id: request.id,
@@ -76,8 +74,15 @@ impl HttpClient for NativeHttpClient {
     }
 }
 
-fn get(agent: &Agent, url: &str) -> Result<HttpResponse, HttpError> {
-    let mut response = agent.get(url).call().map_err(|_| HttpError::Failed)?;
+fn send(agent: &Agent, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    let response = match &request.method {
+        HttpMethod::Get => agent.get(&request.url).call(),
+        HttpMethod::Post { body } => agent
+            .post(&request.url)
+            .header("Content-Type", POST_CONTENT_TYPE)
+            .send(body.as_slice()),
+    };
+    let mut response = response.map_err(|_| HttpError::Failed)?;
     let status = response.status().as_u16();
     let body = response
         .body_mut()
@@ -120,9 +125,37 @@ mod tests {
     #[ignore = "ネットワーク接続が必要"]
     fn fetches_kidspod_program() {
         let client = NativeHttpClient::new();
-        let response = get(&client.agent, "https://kidspod.club/mj/2245").unwrap();
+        let request = HttpRequest {
+            id: 0,
+            method: HttpMethod::Get,
+            url: "https://kidspod.club/mj/2245".into(),
+        };
+        let response = send(&client.agent, &request).unwrap();
         assert_eq!(response.status, 200);
         assert!(response.body.starts_with(b"OK\n10 "));
+    }
+
+    /// 本文と Content-Type がそのまま届く (受け取った内容を返すエコーサービスで確認)。
+    #[test]
+    #[ignore = "ネットワーク接続が必要"]
+    fn posts_raw_body() {
+        let client = NativeHttpClient::new();
+        let request = HttpRequest {
+            id: 0,
+            method: HttpMethod::Post {
+                body: b"HELLO ICHIGO".to_vec(),
+            },
+            url: "https://postman-echo.com/post".into(),
+        };
+        let response = send(&client.agent, &request).unwrap();
+        assert_eq!(response.status, 200);
+        let text = String::from_utf8_lossy(&response.body);
+        assert!(text.contains("application/octet-stream"), "{text}");
+        // 本文は "HELLO ICHIGO" のバイト値の配列として返ってくる
+        assert!(
+            text.contains("[72,69,76,76,79,32,73,67,72,73,71,79]"),
+            "{text}"
+        );
     }
 
     /// 公開 DNS で 127.0.0.1 を返すホスト名でも、名前解決後の検査で接続しない。

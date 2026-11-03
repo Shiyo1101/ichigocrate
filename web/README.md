@@ -9,7 +9,7 @@ web/
 │   ├── runner.rs     # IchigoCrateRunner: core を直接駆動し canvas へ blit
 │   ├── keymap.rs     # KeyboardEvent.code → HID/BTN コード変換
 │   ├── output.rs     # onPrint 用の VRAM 差分ヘルパ
-│   ├── http.rs       # FetchHttpClient: ichigocrate 拡張 GET の fetch 実装
+│   ├── http.rs       # FetchHttpClient: ichigocrate 拡張 GET・POST の fetch 実装
 │   └── storage.rs    # WebStorage: SAVE/LOAD/FILES の localStorage 実装
 ├── build.sh          # wasm ビルド + wasm-bindgen (--target web)
 └── demo/
@@ -58,9 +58,9 @@ r.is_led(); // LED 点灯状態 (枠表示などフロント側で反映)
 - **SAVE/LOAD/FILES**: `core::machine::Storage` を Web 実装 (`WebStorage`) で差し替え。`persist=true` は localStorage (`{prefix}slot_NN` に base64 保存)、`persist=false` はセッション内のみの揮発メモリ。`storagePrefix` で複数インスタンスのスロットを分離する (同一オリジンでの共有を防ぐ)。リロード後もスロット内容は残る。
 - **onPrint**: core を改変せず VRAM 差分で画面出力を近似ストリーミングする。1 フレーム内に画面外へスクロールし切った行や LOCATE で上書きした出力は取りこぼし得るため、確実な全画面状態は `getScreenText()` を併用する。
 
-## GET (HTTPS 通信)
+## GET / POST (HTTPS 通信)
 
-ichigocrate 拡張の `GET` ([core の説明](../core/README.md#get-https-通信)) は、ブラウザの `fetch` で通信する。ブラウザからは接続先の IP を調べられないため、次のようにして内部ネットワークへの到達を防いでいる。
+ichigocrate 拡張の `GET` / `POST` ([core の説明](../core/README.md#get--post-https-通信)) は、ブラウザの `fetch` で通信する。ブラウザからは接続先の IP を調べられないため、次のようにして内部ネットワークへの到達を防いでいる。
 
 - すべてのリクエストに独自ヘッダ `X-Ichigocrate: 1` を付け、必ず CORS の事前確認 (preflight) を経由させる。CORS を許可していない機器 (ルーターなど) には本番のリクエストが届かない
 - Cookie・認証情報は送らない (`credentials: "omit"`)。リダイレクトは失敗として扱う
@@ -69,13 +69,15 @@ ichigocrate 拡張の `GET` ([core の説明](../core/README.md#get-https-通信
 
 ```
 Access-Control-Allow-Origin: <ページのオリジン または *>
-Access-Control-Allow-Headers: X-Ichigocrate
+Access-Control-Allow-Headers: X-Ichigocrate, Content-Type
 ```
+
+(`Content-Type` は POST を受けるときだけ必要)
 
 [kidspod](https://kidspod.club/) は CORS を許可していないため、Web 版からは取得できない (デスクトップ版では取得できる)。
 
 > [!WARNING]
-> `onPrint` が渡す文字列や `getScreenText()` の戻り値には、`GET` で受け取ったサーバーの応答がそのまま含まれうる (外部の誰かが内容を決められる)。ページに表示するときは `textContent` などテキストとして扱い、`innerHTML` などで HTML として挿入しないこと (XSS になる)。demo は `textContent` で表示している。
+> `onPrint` が渡す文字列や `getScreenText()` の戻り値には、`GET` / `POST` で受け取ったサーバーの応答がそのまま含まれうる (外部の誰かが内容を決められる)。ページに表示するときは `textContent` などテキストとして扱い、`innerHTML` などで HTML として挿入しないこと (XSS になる)。demo は `textContent` で表示している。
 
 ## キーボードショートカット (IchigoJam 標準準拠)
 

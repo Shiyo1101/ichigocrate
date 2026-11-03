@@ -1,4 +1,4 @@
-//! ichigocrate 独自拡張: HTTPS 通信 (`GET` 文)。
+//! ichigocrate 独自拡張: HTTPS 通信 (`GET` / `POST` 文)。
 //!
 //! 通信そのものはホストが [`HttpClient`] として実装し ([`Machine::set_http_client`])、
 //! core は URL の検証・リクエストの発行・応答待ちの管理までを担う。応答の扱い
@@ -18,15 +18,27 @@ use crate::ram::N_LINEBUF;
 /// 余裕を持たせた大きさ。超えた応答は Network error として扱う。
 pub const MAX_RESPONSE_BYTES: usize = 2048;
 
+/// POST で送る本文の上限 (バイト)。応答の上限とそろえる。超えたら Illegal argument。
+pub const MAX_REQUEST_BYTES: usize = MAX_RESPONSE_BYTES;
+
+/// POST の本文の種類 (`Content-Type`)。本文は IchigoJam の文字コードのままのバイト列で、
+/// テキストとしては扱わない。
+pub const POST_CONTENT_TYPE: &str = "application/octet-stream";
+
 /// 応答待ちの上限 (ミリ秒)。超えたらリクエストを取り消して Network error にする。
 pub const REQUEST_TIMEOUT_MS: f64 = 10_000.0;
 
 const HTTPS_SCHEME: &str = "https://";
 
-/// HTTP メソッド。現状は GET のみ (POST は将来の拡張)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// HTTP メソッド。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HttpMethod {
     Get,
+    /// 本文は解釈しないバイト列 (IchigoJam の文字コードのまま)。
+    /// `Content-Type: application/octet-stream` で送る。
+    Post {
+        body: Vec<u8>,
+    },
 }
 
 /// ホストへ渡すリクエスト。`id` は応答との対応付けに使う。

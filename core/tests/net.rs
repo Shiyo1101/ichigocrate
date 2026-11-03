@@ -1,4 +1,4 @@
-//! ichigocrate 拡張 `GET` のテスト: URL の検証、応答待ち、応答の受け渡し
+//! ichigocrate 拡張 `GET` / `POST` のテスト: URL の検証、応答待ち、応答の受け渡し
 //! (即時実行はキー入力として流し込み、プログラム実行中は画面へ出力)、
 //! 失敗・タイムアウト・ESC による中断、どんな応答でも異常終了しないこと。
 
@@ -11,7 +11,7 @@ use std::rc::Rc;
 use common::{screen_text, MemStore};
 use ichigocrate_core::net::{
     HttpClient, HttpCompletion, HttpError, HttpMethod, HttpRequest, HttpResponse,
-    MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS,
 };
 use ichigocrate_core::session::{Session, FRAME_MS};
 use ichigocrate_core::{exec_line, BasicError, Machine};
@@ -312,6 +312,96 @@ fn url_can_be_given_by_address() {
     s.machine.ram[ichigocrate_core::ram::OFFSET_RAM_VAR..][..url.len()].copy_from_slice(url);
     let _ = type_line(&mut s, &format!("GET {addr}"));
     assert_eq!(http.requests()[0].url, "https://example.com/x");
+}
+
+/// POST url,"文字列" は文字列を本文として送る。
+#[test]
+fn post_sends_string_body() {
+    let (mut s, http) = new_session();
+    assert_eq!(
+        type_line(&mut s, "POST \"https://example.com/room/1\",\"HELLO\""),
+        None
+    );
+    assert_eq!(
+        http.requests(),
+        vec![HttpRequest {
+            id: 0,
+            method: HttpMethod::Post {
+                body: b"HELLO".to_vec()
+            },
+            url: "https://example.com/room/1".into(),
+        }]
+    );
+    assert!(s.is_running(), "応答が届くまで待つ");
+}
+
+/// POST url,アドレス,長さ は RAM 上の生のバイト列を送る (NUL や `"` も含められる)。
+#[test]
+fn post_sends_raw_bytes_from_address() {
+    let (mut s, http) = new_session();
+    let addr = ichigocrate_core::OFFSET_RAMROM + ichigocrate_core::ram::OFFSET_RAM_VAR;
+    let _ = type_line(
+        &mut s,
+        &format!("POKE {addr},1,0,34,255:POST \"https://example.com/\",{addr},4"),
+    );
+    assert_eq!(
+        http.requests()[0].method,
+        HttpMethod::Post {
+            body: vec![1, 0, 34, 255]
+        }
+    );
+
+    // 長さ 0 なら本文は空
+    let (mut s, http) = new_session();
+    let _ = type_line(&mut s, &format!("POST \"https://example.com/\",{addr},0"));
+    assert_eq!(http.requests()[0].method, HttpMethod::Post { body: vec![] });
+}
+
+/// 本文が大きすぎる・長さが負・RAM の外にかかる・URL が https でないものは送らない。
+#[test]
+fn post_rejects_invalid_arguments_without_sending() {
+    let (mut s, http) = new_session();
+    let addr = ichigocrate_core::OFFSET_RAMROM;
+    let too_long = MAX_REQUEST_BYTES + 1;
+    for line in [
+        format!("POST \"https://example.com/\",{addr},{too_long}"),
+        format!("POST \"https://example.com/\",{addr},-1"),
+        "POST \"https://example.com/\",0,1".to_string(),
+        "POST \"https://example.com/\",#7FFF,2".to_string(),
+        "POST \"http://example.com/\",\"X\"".to_string(),
+    ] {
+        assert_eq!(
+            type_line(&mut s, &line),
+            Some(BasicError::IllegalArgument),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        type_line(&mut s, "POST \"https://example.com/\""),
+        Some(BasicError::SyntaxError)
+    );
+    assert!(http.requests().is_empty());
+}
+
+/// POST の応答の扱いは GET と同じ (プログラム実行中は画面へ出力して次の文へ進む)。
+#[test]
+fn program_post_prints_response() {
+    let (mut s, http) = new_session();
+    run_program(
+        &mut s,
+        &["10 POST \"https://a.jp/\",\"M3\"", "20 ?\"AFTER\""],
+    );
+    assert_eq!(s.tick(0.0), None);
+    assert!(s.is_running());
+    http.respond(b"YOUR TURN\n");
+    let _ = s.tick(FRAME_MS);
+    let t = screen_text(&s.machine);
+    assert!(t.contains("YOUR TURN") && t.contains("AFTER"), "{t}");
+
+    // LIST では POST のまま表示される
+    let _ = type_line(&mut s, "CLS");
+    let _ = type_line(&mut s, "LIST");
+    assert!(screen_text(&s.machine).contains("10 POST \"https://a.jp/\",\"M3\""));
 }
 
 /// 決まった種から擬似乱数列を作る (xorshift64)。テストを再現可能にするため外部クレートは使わない。
