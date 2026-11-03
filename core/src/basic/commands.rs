@@ -10,7 +10,9 @@
 
 use crate::errors::*;
 use crate::machine::{calc_div, calc_mod, strlen8, ListCursor, Machine, PC_NULL};
-use crate::net::{parse_https_url, HttpMethod, HttpRequest, PendingHttp, MAX_REQUEST_BYTES};
+use crate::net::{
+    parse_https_url, HttpMethod, HttpRequest, PendingHttp, ResponseSink, MAX_REQUEST_BYTES,
+};
 use crate::ram::*;
 use crate::tokens::*;
 
@@ -895,67 +897,84 @@ impl Machine {
         Ok(())
     }
 
-    /// GET url (ichigocrate 拡張): `url` (文字列またはそのアドレス) へ HTTPS の GET を
-    /// 発行し、応答が届くまで実行を止める。応答の扱いは Session が行う
-    /// (即時実行ならキー入力として流し込み、プログラム実行中なら画面へ出力)。
+    /// GET url[,書き込み先,最大長] (ichigocrate 拡張): `url` (文字列またはそのアドレス) へ
+    /// HTTPS の GET を発行し、応答が届くまで実行を止める。書き込み先を書くと応答を
+    /// そこへ書き込み、省くと即時実行ならキー入力として流し込み、プログラム実行中なら
+    /// 画面へ出力する (応答の処理は Session が行う)。
     pub(super) fn command_get(&mut self) -> BResult<()> {
-        let addr = self.eval_expression()?;
-        self.expect_statement_end()?;
-        let url = parse_https_url(self.ram_string(addr)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
-        self.start_http(url, HttpMethod::Get)
+        let url = self.eval_expression()?;
+        let args = self.parse_rest_args()?;
+        let url = parse_https_url(self.ram_string(url)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
+        let sink = match *args.as_slice() {
+            [] => self.default_sink(),
+            [dst, max] => memory_sink(dst, max)?,
+            _ => return Err(ERR_SYNTAX_ERROR),
+        };
+        self.start_http(url, HttpMethod::Get, sink)
     }
 
-    /// POST url,data[,len] (ichigocrate 拡張): `url` へ HTTPS の POST を発行する。
-    /// 本文は、`len` を省くと文字列 `data` (文字列またはそのアドレス)、`len` を書くと
-    /// アドレス `data` から `len` バイトの生のバイト列。応答の扱いは GET と同じ。
+    /// POST url,本文[,書き込み先,最大長] (ichigocrate 拡張): `url` へ HTTPS の POST を発行する。
+    /// 本文は `"文字列"` (またはそのアドレス) か `アドレス,長さ` (生のバイト列)。
+    /// 引数の数で区別する (1 つ・3 つなら文字列、2 つ・4 つならバイト列)。
+    /// 応答の扱いは GET と同じ。
     pub(super) fn command_post(&mut self) -> BResult<()> {
-        let url_addr = self.eval_expression()?;
-        self.expect_token(TOKEN_COMMA)?;
-        let data_addr = self.eval_expression()?;
-        let len = if self.token_get().code == TOKEN_COMMA {
-            Some(self.eval_expression()?)
-        } else {
-            self.token_back();
-            None
-        };
-        self.expect_statement_end()?;
-        let url = parse_https_url(self.ram_string(url_addr)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
-        let body = match len {
-            None => self.ram_string(data_addr)?,
-            Some(len) => self.ram_bytes(data_addr, len)?,
+        let url = self.eval_expression()?;
+        let args = self.parse_rest_args()?;
+        let url = parse_https_url(self.ram_string(url)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
+        let (body, sink) = match *args.as_slice() {
+            [data] => (self.ram_string(data)?, None),
+            [data, len] => (self.ram_bytes(data, len)?, None),
+            [data, dst, max] => (self.ram_string(data)?, Some((dst, max))),
+            [data, len, dst, max] => (self.ram_bytes(data, len)?, Some((dst, max))),
+            _ => return Err(ERR_SYNTAX_ERROR),
         };
         if body.len() > MAX_REQUEST_BYTES {
             return Err(ERR_ILLEGAL_ARGUMENT);
         }
         let body = body.to_vec();
-        self.start_http(url, HttpMethod::Post { body })
+        let sink = match sink {
+            None => self.default_sink(),
+            Some((dst, max)) => memory_sink(dst, max)?,
+        };
+        self.start_http(url, HttpMethod::Post { body }, sink)
+    }
+
+    /// `,式` の並びを文末まで読む (最初の引数の後ろ)。
+    fn parse_rest_args(&mut self) -> BResult<Vec<i16>> {
+        let mut args = Vec::new();
+        while self.token_get().code == TOKEN_COMMA {
+            args.push(self.eval_expression()?);
+        }
+        self.token_back();
+        self.expect_statement_end()?;
+        Ok(args)
+    }
+
+    /// 書き込み先を省いたときの受け取り方。
+    fn default_sink(&self) -> ResponseSink {
+        if self.pc_in_list() {
+            ResponseSink::Screen
+        } else {
+            ResponseSink::Input
+        }
     }
 
     /// リクエストをホストへ渡し、応答待ちにする。
-    fn start_http(&mut self, url: String, method: HttpMethod) -> BResult<()> {
+    fn start_http(&mut self, url: String, method: HttpMethod, sink: ResponseSink) -> BResult<()> {
         let Some(client) = self.http_client.as_mut() else {
             return Err(ERR_NETWORK_ERROR);
         };
         let id = self.http_next_id;
         self.http_next_id = id.wrapping_add(1);
         client.start(HttpRequest { id, method, url });
-        self.http_pending = Some(PendingHttp {
-            id,
-            feeds_input: !self.pc_in_list(),
-        });
+        self.http_pending = Some(PendingHttp { id, sink });
         Ok(())
     }
 
-    /// 仮想アドレス `addr` から `len` バイト。RAM の外にかかる・`len` が負なら Illegal argument。
+    /// 仮想アドレス `addr` から `len` バイト。
     fn ram_bytes(&self, addr: i16, len: i16) -> BResult<&[u8]> {
-        let len = usize::try_from(len).map_err(|_| ERR_ILLEGAL_ARGUMENT)?;
-        let start = (addr as u16 as usize)
-            .checked_sub(OFFSET_RAMROM)
-            .ok_or(ERR_ILLEGAL_ARGUMENT)?;
-        self.ram
-            .get(start..SIZE_RAM)
-            .and_then(|rest| rest.get(..len))
-            .ok_or(ERR_ILLEGAL_ARGUMENT)
+        let range = ram_range(addr, len)?;
+        Ok(&self.ram[range])
     }
 
     /// 仮想アドレス `addr` から `"` か NUL の手前までのバイト列 (文字列リテラル本体)。
@@ -973,7 +992,7 @@ impl Machine {
     }
 
     pub(super) fn command_help(&mut self) -> BResult<()> {
-        self.put_str("#000 CHAR\n#700 PCG\n#800 VAR\n#900 VRAM\n#C00 LIST\n");
+        self.put_str("#000 CHAR\n#700 PCG\n#800 VAR\n#900 VRAM\n#C00 LIST\n#1200 NET\n");
         self.expect_statement_end()
     }
 
@@ -1222,4 +1241,27 @@ impl Machine {
             self.put_chr(c);
         }
     }
+}
+
+/// 応答の書き込み先。範囲が RAM の外にかかる・最大長が負なら Illegal argument。
+fn memory_sink(dst: i16, max: i16) -> BResult<ResponseSink> {
+    let range = ram_range(dst, max)?;
+    Ok(ResponseSink::Memory {
+        offset: range.start,
+        max: range.len(),
+    })
+}
+
+/// 仮想アドレス `addr` から `len` バイトの RAM 上の範囲。RAM の外にかかる・
+/// `len` が負なら Illegal argument。
+fn ram_range(addr: i16, len: i16) -> BResult<std::ops::Range<usize>> {
+    let len = usize::try_from(len).map_err(|_| ERR_ILLEGAL_ARGUMENT)?;
+    let start = (addr as u16 as usize)
+        .checked_sub(OFFSET_RAMROM)
+        .ok_or(ERR_ILLEGAL_ARGUMENT)?;
+    let end = start.checked_add(len).ok_or(ERR_ILLEGAL_ARGUMENT)?;
+    if end > SIZE_RAM {
+        return Err(ERR_ILLEGAL_ARGUMENT);
+    }
+    Ok(start..end)
 }

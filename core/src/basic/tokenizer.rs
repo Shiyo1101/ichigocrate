@@ -90,15 +90,18 @@ impl Machine {
             }
         } else {
             // トークンテーブル検索 (式モードでは予約語の一部のみマッチ)
-            let max = if self.is_expr_mode {
-                N_TOKEN_EXPRESSION as usize
-            } else {
-                N_TOKEN
-            };
             let mut p = 0usize;
             let mut matched = None;
-            for i in 0..max {
+            for i in 0..N_TOKEN {
                 let len = TOKENS[p] as usize;
+                let code = i as u16 + N_TOKEN_OFFSET;
+                if self.is_expr_mode
+                    && code >= N_TOKEN_EXPRESSION
+                    && !EXPRESSION_EXTENSION_TOKENS.contains(&code)
+                {
+                    p += len;
+                    continue;
+                }
                 let mut hit = true;
                 for j in 1..len {
                     let mut c2;

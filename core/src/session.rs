@@ -18,7 +18,7 @@ use crate::errors::BasicError;
 use crate::keycodes as kc;
 use crate::keymap::HID_CAPS_LOCK;
 use crate::machine::{BasicResult, Machine, PC_NULL};
-use crate::net::{HttpCompletion, HttpError, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS};
+use crate::net::{HttpCompletion, HttpError, ResponseSink, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS};
 use crate::ram::{OFFSET_RAM_VRAM, SIZE_RAM_VRAM};
 use crate::{exec_line_bytes, LineOutcome};
 
@@ -444,15 +444,33 @@ impl Session {
                 return Some(self.abort_network(pending.id, BasicError::NetworkError));
             }
         };
+        if let ResponseSink::Memory { max, .. } = pending.sink {
+            // 入りきらない応答は途中で切らずにエラーにする (切ると対戦の状態がずれる)
+            if body.len() > max {
+                return Some(self.abort_network(pending.id, BasicError::OutOfMemory));
+            }
+        }
         self.machine.http_pending = None;
         self.http_started_ms = None;
-        // 応答は解釈しない。CR だけは捨てる (CRLF の応答で改行が二重にならないように)。
-        let body = body.into_iter().filter(|&b| b != b'\r');
-        if pending.feeds_input {
-            self.pending_feed.extend(body);
-        } else {
-            for b in body {
-                self.machine.put_chr(b);
+        match pending.sink {
+            // メモリへはそのまま書く。空きがあれば NUL を付けて ?STR$() で表示できるようにする
+            ResponseSink::Memory { offset, max } => {
+                self.machine.ram[offset..][..body.len()].copy_from_slice(&body);
+                if body.len() < max {
+                    self.machine.ram[offset + body.len()] = 0;
+                }
+                // 2KB 以下なので i16 に収まる
+                self.machine.net_received_len = body.len() as i16;
+            }
+            // 応答は解釈しない。CR だけは捨てる (CRLF の応答で改行が二重にならないように)。
+            ResponseSink::Input => {
+                self.pending_feed
+                    .extend(body.into_iter().filter(|&b| b != b'\r'));
+            }
+            ResponseSink::Screen => {
+                for b in body.into_iter().filter(|&b| b != b'\r') {
+                    self.machine.put_chr(b);
+                }
             }
         }
         None

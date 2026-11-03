@@ -213,6 +213,7 @@ impl Machine {
                 self.expect_paren_close()?;
                 Ok(self.psg_sound() as i16)
             }
+            TOKEN_NET => Ok(self.net_received_len),
             TOKEN_FREE => Ok(((IJB_SIZEOF_LIST as u16) - 2 - self.list_size) as i16),
             TOKEN_VER => {
                 let n = self.eval_optional_arg()?;
