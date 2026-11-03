@@ -193,17 +193,59 @@ fn program_get_prints_response_and_waits() {
     assert!(!screen_text(&s.machine).contains("10 ?1"));
 }
 
-/// HTTP のステータスに関わらず本文はそのまま扱う。
+/// 画面に `first` の行があり、その次の行が `second` で始まるか。
+fn has_lines(screen: &str, first: &str, second: &str) -> bool {
+    let lines: Vec<&str> = screen.lines().map(str::trim_end).collect();
+    lines
+        .windows(2)
+        .any(|w| w[0] == first && w[1].starts_with(second))
+}
+
+/// ステータスが 2xx 以外なら本文は使わず、ステータスを表示して Network error で止める。
 #[test]
-fn error_status_body_is_still_output() {
+fn error_status_shows_status_and_stops() {
+    // プログラム実行中: 本文は画面に出さず、次の文へ進まない
     let (mut s, http) = new_session();
-    run_program(&mut s, &["10 GET \"https://example.com/\""]);
+    run_program(
+        &mut s,
+        &["10 GET \"https://example.com/\"", "20 ?\"AFTER\""],
+    );
     http.complete(Ok(HttpResponse {
         status: 404,
         body: b"NOT FOUND".to_vec(),
     }));
+    assert_eq!(s.tick(0.0), Some(BasicError::NetworkError));
+    assert!(!s.is_running());
+    let t = screen_text(&s.machine);
+    assert!(has_lines(&t, "HTTP 404", "Network error in 10"), "{t}");
+    assert!(!t.contains("NOT FOUND") && !t.contains("AFTER"), "{t}");
+
+    // 即時実行: エラーページの本文をキー入力として流し込まない
+    let (mut s, http) = new_session();
+    let _ = type_line(&mut s, "GET \"https://kidspod.club/mj/0\"");
+    http.complete(Ok(HttpResponse {
+        status: 500,
+        body: b"10 ?\"X\"\nerror!!".to_vec(),
+    }));
+    assert_eq!(s.tick(0.0), Some(BasicError::NetworkError));
+    assert!(!s.is_running());
+    assert_eq!(s.machine.list_size, 0);
+    let t = screen_text(&s.machine);
+    assert!(has_lines(&t, "HTTP 500", "Network error"), "{t}");
+    assert!(!t.contains("Syntax error"), "{t}");
+}
+
+/// 2xx ならどれでも成功として本文を扱う。
+#[test]
+fn any_2xx_status_is_success() {
+    let (mut s, http) = new_session();
+    run_program(&mut s, &["10 GET \"https://example.com/\""]);
+    http.complete(Ok(HttpResponse {
+        status: 204,
+        body: b"DONE".to_vec(),
+    }));
     assert_eq!(s.tick(0.0), None);
-    assert!(screen_text(&s.machine).contains("NOT FOUND"));
+    assert!(screen_text(&s.machine).contains("DONE"));
 }
 
 #[test]

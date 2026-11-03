@@ -425,8 +425,22 @@ impl Session {
             return None;
         };
         let body = match completion.result {
-            Ok(response) if response.body.len() <= MAX_RESPONSE_BYTES => response.body,
-            Ok(_) | Err(HttpError::Failed | HttpError::TooLarge) => {
+            Ok(response) if response.body.len() > MAX_RESPONSE_BYTES => {
+                return Some(self.abort_network(pending.id, BasicError::NetworkError));
+            }
+            // 失敗の理由がわかるよう、ステータスを表示してから止める。エラーページの本文を
+            // キー入力として流し込むと無関係なエラーが出るだけなので、本文は捨てる。
+            Ok(response) if !response.is_success() => {
+                if !self.machine.is_quiet_mode {
+                    if self.machine.cursory == -1 {
+                        self.machine.cursory = 0;
+                    }
+                    self.machine.put_str(&format!("HTTP {}\n", response.status));
+                }
+                return Some(self.abort_network(pending.id, BasicError::NetworkError));
+            }
+            Ok(response) => response.body,
+            Err(HttpError::Failed | HttpError::TooLarge) => {
                 return Some(self.abort_network(pending.id, BasicError::NetworkError));
             }
         };
