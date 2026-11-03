@@ -9,8 +9,8 @@ core/
 ├── src/
 │   ├── lib.rs           # 公開 API + exec_line / exec_line_bytes
 │   ├── machine.rs       # Machine 構造体 (元 GLOBAL + RAM) と Storage トレイト
-│   ├── session.rs       # ホスト共通の実行状態機械 (REPL / RUN / INPUT / WAIT / GET / 60Hz tick)
-│   ├── net.rs           # ichigocrate 拡張 GET: URL 検証・HttpClient トレイト・接続先の判定
+│   ├── session.rs       # ホスト共通の実行状態機械 (REPL / RUN / INPUT / WAIT / GET・POST / 60Hz tick)
+│   ├── net.rs           # ichigocrate 拡張 GET・POST: URL 検証・HttpClient トレイト・接続先の判定
 │   ├── basic.rs         # 実行ループと文のディスパッチ
 │   ├── basic/           # tokenizer / expr (式評価) / commands (各文) / sin
 │   ├── screen.rs        # VRAM 操作 + ピクセル描画
@@ -55,13 +55,22 @@ core/
 
 ## ichigocrate 独自拡張
 
-### GET (HTTPS 通信)
+### GET / POST (HTTPS 通信)
 
 ```basic
 GET "https://kidspod.club/mj/2245"
+POST "https://example.com/room/1","MOVE 3"
+POST "https://example.com/room/1",#800,16
 ```
 
-指定した URL へ HTTPS で GET を送り、届いたレスポンスを解釈せずにそのまま扱う。URL は文字列リテラルのほか、文字列を置いた RAM のアドレスでも渡せる。
+指定した URL へ HTTPS で GET / POST を送り、届いたレスポンスを解釈せずにそのまま扱う。URL は文字列リテラルのほか、文字列を置いた RAM のアドレスでも渡せる。
+
+POST の本文は次のどちらか。どちらも IchigoJam の文字コードのままのバイト列で、`Content-Type: application/octet-stream` として送る。
+
+- `POST url,文字列` — 文字列 (リテラルまたはそのアドレス) を送る
+- `POST url,アドレス,長さ` — RAM 上の `長さ` バイトをそのまま送る (NUL や `"` も含められる)。本文は 2KB (`net::MAX_REQUEST_BYTES`) まで、長さが負・RAM の外にかかる・上限を超える場合は Illegal argument
+
+レスポンスの扱いは GET も POST も同じ。
 
 - 即時実行 (REPL で直接打ったとき) — レスポンスをキー入力として流し込む。改行ごとに Enter を押した扱いになるので、行番号付きの行はプログラムとして登録され、それ以外の行はその場で実行される ([kidspod](https://kidspod.club/) の `/mj/<プログラムID>` からプログラムを取り込める)
 - プログラム実行中 — レスポンスを画面へ出力し、次の文へ進む
@@ -82,7 +91,7 @@ GET "https://kidspod.club/mj/2245"
 
 | 番号 | メッセージ    | 内容                                                                    |
 | ---- | ------------- | ----------------------------------------------------------------------- |
-| 13   | Network error | GET の通信失敗 (接続不可・タイムアウト・上限超過・2xx 以外のステータス) |
+| 13   | Network error | GET・POST の通信失敗 (接続不可・タイムアウト・上限超過・2xx 以外のステータス) |
 
 ## テスト
 

@@ -212,6 +212,7 @@ impl Machine {
             TOKEN_FILES => self.command_files()?,
             TOKEN_HELP => self.command_help()?,
             TOKEN_GET => self.command_get()?,
+            TOKEN_POST => self.command_post()?,
             _ => return Err(ERR_SYNTAX_ERROR),
         }
         Ok(())

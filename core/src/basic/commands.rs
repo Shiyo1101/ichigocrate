@@ -10,7 +10,7 @@
 
 use crate::errors::*;
 use crate::machine::{calc_div, calc_mod, strlen8, ListCursor, Machine, PC_NULL};
-use crate::net::{parse_https_url, HttpMethod, HttpRequest, PendingHttp};
+use crate::net::{parse_https_url, HttpMethod, HttpRequest, PendingHttp, MAX_REQUEST_BYTES};
 use crate::ram::*;
 use crate::tokens::*;
 
@@ -902,21 +902,60 @@ impl Machine {
         let addr = self.eval_expression()?;
         self.expect_statement_end()?;
         let url = parse_https_url(self.ram_string(addr)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
+        self.start_http(url, HttpMethod::Get)
+    }
+
+    /// POST url,data[,len] (ichigocrate 拡張): `url` へ HTTPS の POST を発行する。
+    /// 本文は、`len` を省くと文字列 `data` (文字列またはそのアドレス)、`len` を書くと
+    /// アドレス `data` から `len` バイトの生のバイト列。応答の扱いは GET と同じ。
+    pub(super) fn command_post(&mut self) -> BResult<()> {
+        let url_addr = self.eval_expression()?;
+        self.expect_token(TOKEN_COMMA)?;
+        let data_addr = self.eval_expression()?;
+        let len = if self.token_get().code == TOKEN_COMMA {
+            Some(self.eval_expression()?)
+        } else {
+            self.token_back();
+            None
+        };
+        self.expect_statement_end()?;
+        let url = parse_https_url(self.ram_string(url_addr)?).ok_or(ERR_ILLEGAL_ARGUMENT)?;
+        let body = match len {
+            None => self.ram_string(data_addr)?,
+            Some(len) => self.ram_bytes(data_addr, len)?,
+        };
+        if body.len() > MAX_REQUEST_BYTES {
+            return Err(ERR_ILLEGAL_ARGUMENT);
+        }
+        let body = body.to_vec();
+        self.start_http(url, HttpMethod::Post { body })
+    }
+
+    /// リクエストをホストへ渡し、応答待ちにする。
+    fn start_http(&mut self, url: String, method: HttpMethod) -> BResult<()> {
         let Some(client) = self.http_client.as_mut() else {
             return Err(ERR_NETWORK_ERROR);
         };
         let id = self.http_next_id;
         self.http_next_id = id.wrapping_add(1);
-        client.start(HttpRequest {
-            id,
-            method: HttpMethod::Get,
-            url,
-        });
+        client.start(HttpRequest { id, method, url });
         self.http_pending = Some(PendingHttp {
             id,
             feeds_input: !self.pc_in_list(),
         });
         Ok(())
+    }
+
+    /// 仮想アドレス `addr` から `len` バイト。RAM の外にかかる・`len` が負なら Illegal argument。
+    fn ram_bytes(&self, addr: i16, len: i16) -> BResult<&[u8]> {
+        let len = usize::try_from(len).map_err(|_| ERR_ILLEGAL_ARGUMENT)?;
+        let start = (addr as u16 as usize)
+            .checked_sub(OFFSET_RAMROM)
+            .ok_or(ERR_ILLEGAL_ARGUMENT)?;
+        self.ram
+            .get(start..SIZE_RAM)
+            .and_then(|rest| rest.get(..len))
+            .ok_or(ERR_ILLEGAL_ARGUMENT)
     }
 
     /// 仮想アドレス `addr` から `"` か NUL の手前までのバイト列 (文字列リテラル本体)。
