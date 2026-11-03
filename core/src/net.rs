@@ -12,11 +12,12 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use crate::ram::N_LINEBUF;
+use crate::ram::{N_LINEBUF, SIZE_RAM_NET};
 
 /// レスポンス本文の上限 (バイト)。LIST 1 本分 (約 1KB) をテキスト化したものに
-/// 余裕を持たせた大きさ。超えた応答は Network error として扱う。
-pub const MAX_RESPONSE_BYTES: usize = 2048;
+/// 余裕を持たせた大きさで、NET 領域 (`#1200`) に丸ごと入る。超えた応答は
+/// Network error として扱う。
+pub const MAX_RESPONSE_BYTES: usize = SIZE_RAM_NET;
 
 /// POST で送る本文の上限 (バイト)。応答の上限とそろえる。超えたら Illegal argument。
 pub const MAX_REQUEST_BYTES: usize = MAX_RESPONSE_BYTES;
@@ -92,13 +93,22 @@ pub trait HttpClient: std::fmt::Debug {
     fn cancel(&mut self, _id: u32) {}
 }
 
+/// 応答の受け取り方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResponseSink {
+    /// キー入力として流し込む (書き込み先を省いた即時実行)。
+    Input,
+    /// 画面へ出力する (書き込み先を省いたプログラム実行中)。
+    Screen,
+    /// RAM の `offset` から最大 `max` バイトへそのまま書き込む。
+    Memory { offset: usize, max: usize },
+}
+
 /// 応答待ち中のリクエスト。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PendingHttp {
     pub(crate) id: u32,
-    /// 即時実行 (REPL) で発行されたか。真なら応答をキー入力として流し込み、
-    /// 偽 (プログラム実行中) なら画面へ出力する。
-    pub(crate) feeds_input: bool,
+    pub(crate) sink: ResponseSink,
 }
 
 /// RAM 上の文字列から URL を取り出して検証する。不正なら `None`。

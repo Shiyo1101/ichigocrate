@@ -169,6 +169,8 @@ pub struct Machine {
     pub(crate) http_pending: Option<PendingHttp>,
     /// 次に発行するリクエストの番号。古い応答を取り違えないよう RESET 後も引き継ぐ。
     pub(crate) http_next_id: u32,
+    /// 直前にメモリへ書き込んだ応答の長さ (`NET()` の値)。RESET で 0 に戻る。
+    pub(crate) net_received_len: i16,
 
     /// 画面 1 枚分を表示して一時停止中の LIST の続き。
     pub(crate) list_cursor: Option<ListCursor>,
@@ -288,6 +290,7 @@ impl Machine {
             http_client: None,
             http_pending: None,
             http_next_id: 0,
+            net_received_len: 0,
             list_cursor: None,
         };
         m.basic_init();

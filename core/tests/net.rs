@@ -1,6 +1,7 @@
 //! ichigocrate 拡張 `GET` / `POST` のテスト: URL の検証、応答待ち、応答の受け渡し
 //! (即時実行はキー入力として流し込み、プログラム実行中は画面へ出力)、
-//! 失敗・タイムアウト・ESC による中断、どんな応答でも異常終了しないこと。
+//! メモリ (NET 領域) への書き込みと `NET()`、失敗・タイムアウト・ESC による中断、
+//! どんな応答でも異常終了しないこと。
 
 mod common;
 
@@ -8,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use common::{screen_text, MemStore};
+use common::{screen_text, var, vram_line, MemStore};
 use ichigocrate_core::net::{
     HttpClient, HttpCompletion, HttpError, HttpMethod, HttpRequest, HttpResponse,
     MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_MS,
@@ -404,6 +405,177 @@ fn program_post_prints_response() {
     assert!(screen_text(&s.machine).contains("10 POST \"https://a.jp/\",\"M3\""));
 }
 
+/// NET 領域 (`#1200`) の仮想アドレス。
+const NET: i32 = 0x1200;
+
+/// プログラムを走らせ、GET/POST の応答を返して終わるまで進める。
+fn run_with_response(program: &[&str], body: &[u8]) -> (Session, MockHttp) {
+    let (mut s, http) = new_session();
+    run_program(&mut s, program);
+    http.respond(body);
+    let mut t = 0.0;
+    while s.is_running() {
+        t += FRAME_MS;
+        let _ = s.tick(t);
+        assert!(t < 1000.0, "終わらない");
+    }
+    (s, http)
+}
+
+/// 書き込み先を書くと、応答を画面に出さずにそのまま (CR も含めて) 書き込み、
+/// 後ろに NUL を付ける。長さは NET() で読める。
+#[test]
+fn get_writes_response_to_memory() {
+    let (s, _) = run_with_response(
+        &[
+            "5 CLS",
+            "10 GET \"https://a.jp/\",#1200,100",
+            "20 ?NET()",
+            "30 ?STR$(#1200)",
+        ],
+        b"D3\r\n",
+    );
+    let m = &s.machine;
+    let written: Vec<u8> = (0..5).map(|i| m.peek(NET + i)).collect();
+    assert_eq!(written, b"D3\r\n\0");
+    // 画面には ?NET() と ?STR$() の出力だけが出る
+    let lines: Vec<String> = (0..4).map(|y| vram_line(m, y)).collect();
+    assert_eq!(lines[0].trim_end(), "4");
+    assert_eq!(lines[1].trim_end(), "D3", "{lines:?}");
+}
+
+/// 即時実行でも、書き込み先を書けばキー入力として流し込まない。
+#[test]
+fn immediate_get_with_destination_does_not_feed() {
+    let (mut s, http) = new_session();
+    let _ = type_line(&mut s, "GET \"https://a.jp/\",#1200,100");
+    http.respond(b"10 ?\"X\"\n");
+    assert_eq!(s.tick(0.0), None);
+    assert!(!s.is_running());
+    assert_eq!(s.machine.list_size, 0, "プログラムとして登録しない");
+    assert_eq!(s.machine.peek(NET), b'1');
+    let _ = type_line(&mut s, "A=NET()");
+    assert_eq!(var(&s.machine, b'A'), 8);
+}
+
+/// 応答が最大長ちょうどなら NUL は付けない (書き込み先の外は書き換えない)。
+/// 0 を含むバイナリでも NET() で長さがわかる。
+#[test]
+fn memory_write_fills_exactly_without_nul() {
+    let (s, _) = run_with_response(
+        &[
+            "10 POKE #1203,170",
+            "20 GET \"https://a.jp/\",#1200,3",
+            "30 A=NET()",
+        ],
+        &[1, 0, 2],
+    );
+    let m = &s.machine;
+    let written: Vec<u8> = (0..4).map(|i| m.peek(NET + i)).collect();
+    assert_eq!(written, [1, 0, 2, 170]);
+    assert_eq!(var(m, b'A'), 3);
+}
+
+/// 最大長を超える応答は途中で切らずに Out of memory で止める。メモリも NET() も変えない。
+#[test]
+fn oversized_memory_write_is_out_of_memory() {
+    let (mut s, http) = new_session();
+    run_program(
+        &mut s,
+        &["10 POKE #1200,7", "20 GET \"https://a.jp/\",#1200,3"],
+    );
+    let _ = s.tick(0.0);
+    http.respond(b"ABCD");
+    assert_eq!(s.tick(FRAME_MS), Some(BasicError::OutOfMemory));
+    assert!(!s.is_running());
+    assert!(screen_text(&s.machine).contains("Out of memory in 20"));
+    assert_eq!(s.machine.peek(NET), 7);
+    let _ = type_line(&mut s, "A=NET()");
+    assert_eq!(var(&s.machine, b'A'), 0);
+}
+
+/// POST も書き込み先を書ける (本文が文字列なら 4 引数、バイト列なら 5 引数)。
+#[test]
+fn post_with_destination() {
+    let (s, http) = run_with_response(&["10 POST \"https://a.jp/\",\"M3\",#1200,10"], b"ZQ");
+    assert_eq!(
+        http.requests()[0].method,
+        HttpMethod::Post {
+            body: b"M3".to_vec()
+        }
+    );
+    assert_eq!(s.machine.peek(NET), b'Z');
+    assert!(!screen_text(&s.machine).contains("ZQ"));
+
+    let (s, http) = run_with_response(
+        &["10 [0]=258", "20 POST \"https://a.jp/\",#800,2,#1200,10"],
+        b"Z",
+    );
+    assert_eq!(
+        http.requests()[0].method,
+        HttpMethod::Post { body: vec![2, 1] }
+    );
+    assert_eq!(s.machine.peek(NET), b'Z');
+}
+
+/// 書き込み先の引数が足りない・範囲が RAM の外にかかる・最大長が負なら送らない。
+#[test]
+fn invalid_destination_is_rejected_without_sending() {
+    let (mut s, http) = new_session();
+    for (line, err) in [
+        ("GET \"https://a.jp/\",#1200", BasicError::SyntaxError),
+        ("GET \"https://a.jp/\",#1200,1,2", BasicError::SyntaxError),
+        (
+            "POST \"https://a.jp/\",\"X\",#1200,1,2,3",
+            BasicError::SyntaxError,
+        ),
+        (
+            "GET \"https://a.jp/\",#1200,2049",
+            BasicError::IllegalArgument,
+        ),
+        ("GET \"https://a.jp/\",#19FF,2", BasicError::IllegalArgument),
+        (
+            "GET \"https://a.jp/\",#1200,-1",
+            BasicError::IllegalArgument,
+        ),
+        ("GET \"https://a.jp/\",#600,10", BasicError::IllegalArgument),
+    ] {
+        assert_eq!(type_line(&mut s, line), Some(err), "{line}");
+    }
+    assert!(http.requests().is_empty());
+    // NET 領域の終わりちょうどまでは書ける
+    assert_eq!(type_line(&mut s, "GET \"https://a.jp/\",#19FF,1"), None);
+    assert_eq!(http.requests().len(), 1);
+}
+
+/// NET 領域は PEEK / POKE / COPY で使え、NEW では消えず RESET で消える。HELP にも載る。
+#[test]
+fn net_area_is_ordinary_ram() {
+    let mut m = Machine::new();
+    exec_line(&mut m, "POKE #1200,65:POKE #19FF,66:COPY #800,#1200,1").unwrap();
+    assert_eq!(m.peek(0x800), 65);
+    assert_eq!(m.peek(0x19FF), 66);
+    // NET 領域の先は従来どおり RAM の外 (書けず、読むと 0)
+    exec_line(&mut m, "POKE #1A00,1").unwrap();
+    assert_eq!(m.peek(0x1A00), 0);
+    exec_line(&mut m, "NEW").unwrap();
+    assert_eq!(m.peek(NET), 65, "NEW では消えない");
+    m.power_on_reset();
+    assert_eq!(m.peek(NET), 0, "RESET で消える");
+
+    exec_line(&mut m, "CLS:HELP").unwrap();
+    assert!(screen_text(&m).contains("#1200 NET"));
+}
+
+/// NET() は式の中で使える (IF の条件など)。
+#[test]
+fn net_function_in_expressions() {
+    let mut m = Machine::new();
+    exec_line(&mut m, "A=NET()+1:IF NET()=0 B=5").unwrap();
+    assert_eq!(var(&m, b'A'), 1);
+    assert_eq!(var(&m, b'B'), 5);
+}
+
 /// 決まった種から擬似乱数列を作る (xorshift64)。テストを再現可能にするため外部クレートは使わない。
 fn xorshift(mut seed: u64) -> impl FnMut() -> u64 {
     move || {
@@ -415,7 +587,7 @@ fn xorshift(mut seed: u64) -> impl FnMut() -> u64 {
 }
 
 /// どんな応答 (最大 2KB の任意のバイト列) を受け取っても、即時実行での流し込み・
-/// 実行中の画面出力のどちらでも異常終了 (パニック) しない。応答はサーバー側が
+/// 実行中の画面出力・メモリへの書き込みのどれでも異常終了 (パニック) しない。応答はサーバー側が
 /// 自由に決められるので、ホスト側の安全はこれに依存する。
 #[test]
 fn arbitrary_responses_never_panic() {
@@ -435,16 +607,18 @@ fn arbitrary_responses_never_panic() {
                 }
             })
             .collect();
-        for in_program in [false, true] {
+        for mode in ["immediate", "program", "memory"] {
             let http = MockHttp::default();
             let mut m = Machine::new();
             m.set_http_client(Box::new(http.clone()));
             m.set_storage(Box::<MemStore>::default());
             let mut s = Session::new(m);
-            if in_program {
-                run_program(&mut s, &["10 GET \"https://example.com/\""]);
-            } else {
-                let _ = type_line(&mut s, "GET \"https://example.com/\"");
+            match mode {
+                "immediate" => {
+                    let _ = type_line(&mut s, "GET \"https://example.com/\"");
+                }
+                "program" => run_program(&mut s, &["10 GET \"https://example.com/\""]),
+                _ => run_program(&mut s, &["10 GET \"https://example.com/\",#1200,2048"]),
             }
             http.respond(&body);
             let mut t = 0.0;
@@ -456,7 +630,7 @@ fn arbitrary_responses_never_panic() {
                     s.on_escape();
                 }
             }
-            fed_programs += usize::from(!in_program && s.machine.list_size > 0);
+            fed_programs += usize::from(mode == "immediate" && s.machine.list_size > 0);
         }
     }
     // 流し込みが実際に行われている (応答が素通りされていない) ことの確認
