@@ -31,9 +31,9 @@ cargo run --release -p ichigocrate-app
 
 `SAVE n` / `LOAD n` / `FILES` はホスト OS の `~/.ichigocrate/slot_NN.ijb` (NN はスロット番号 0-15) に LIST 領域のバイナリを直接読み書きする (`core::machine::Storage` の `DiskStorage` 実装)。
 
-## GET (HTTPS 通信)
+## GET / POST (HTTPS 通信)
 
-ichigocrate 拡張の `GET` ([core の説明](../core/README.md#get-https-通信)) は、`ureq` で通信する (`src/http.rs`)。リクエストごとにスレッドで通信するので UI は固まらない。内部ネットワークへ到達させないため、次のようにしている。
+ichigocrate 拡張の `GET` / `POST` ([core の説明](../core/README.md#get--post-https-通信)) は、`ureq` で通信する (`src/http.rs`)。リクエストごとにスレッドで通信するので UI は固まらない。内部ネットワークへ到達させないため、次のようにしている。
 
 - 証明書は ureq 同梱の公開ルート証明書 (webpki-roots) だけで検証し、OS の証明書ストアは使わない (社内 CA のサービスにつながらないように)
 - 名前解決の結果が 1 つでも内部ネットワークのアドレスなら接続しない。検査したアドレスへそのまま接続するので、検査後に名前を引き直してすり替える攻撃 (DNS リバインディング) も効かない
