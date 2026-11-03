@@ -74,6 +74,9 @@ Access-Control-Allow-Headers: X-Ichigocrate
 
 [kidspod](https://kidspod.club/) は CORS を許可していないため、Web 版からは取得できない (デスクトップ版では取得できる)。
 
+> [!WARNING]
+> `onPrint` が渡す文字列や `getScreenText()` の戻り値には、`GET` で受け取ったサーバーの応答がそのまま含まれうる (外部の誰かが内容を決められる)。ページに表示するときは `textContent` などテキストとして扱い、`innerHTML` などで HTML として挿入しないこと (XSS になる)。demo は `textContent` で表示している。
+
 ## キーボードショートカット (IchigoJam 標準準拠)
 
 | キー | 動作                                             |
