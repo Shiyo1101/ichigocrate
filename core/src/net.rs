@@ -38,11 +38,19 @@ pub struct HttpRequest {
     pub url: String,
 }
 
-/// 成功した応答。ステータスコードに関わらず本文はそのまま扱う。
+/// サーバーから届いた応答。ステータスが 2xx 以外なら本文は使わず Network error にする
+/// ([`HttpResponse::is_success`])。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
+}
+
+impl HttpResponse {
+    /// ステータスが成功 (2xx) か。
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
 }
 
 /// 通信の失敗理由。BASIC 側ではどれも Network error になる。
