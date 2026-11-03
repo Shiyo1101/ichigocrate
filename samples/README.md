@@ -26,7 +26,7 @@ ichigocrate で動く BASIC プログラムのサンプル。どれも `core/tes
 20 行目で、公開している中継サーバーを使う。
 
 ```basic
-20 S="https://ichigocrate-relay.ichigocrate-relay.workers.dev"
+20 S="https://ichigocrate-relay.uchii.workers.dev"
 ```
 
 Cloudflare の無料プランで動かしているので、利用が多いと 1 日の上限に達して使えなくなることがある。自分の中継サーバーを使う場合は、ichigocrate-relay を自分の Cloudflare アカウントにデプロイし (手順は ichigocrate-relay の README)、20 行目の URL を書き換える。
@@ -48,4 +48,4 @@ Cloudflare の無料プランで動かしているので、利用が多いと 1 
 | 300〜330 行 | 自分の番: 押されたキーの手を `#1210` に置き、`POST` で相手の受信箱へ送る |
 | 130〜150 行 | 勝ち判定。縦横斜めの 8 通りの並びを文字列 `D` から読む |
 
-盤面は配列 `[0]`〜`[8]` (0: 空き、1: O、2: X) に持つ。プログラムは約 960 バイトで、`FREE()` の残りは約 60 バイト。
+盤面は配列 `[0]`〜`[8]` (0: 空き、1: O、2: X) に持つ。プログラムは約 950 バイトで、`FREE()` の残りは約 70 バイト。
