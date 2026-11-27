@@ -26,11 +26,11 @@ cd web && ./build.sh                               # pkg/ に wasm + JS グル�
 python3 -m http.server                             # http://localhost:8000/demo/
 ```
 
-ビルド成果物 (`pkg/`) は ES モジュールとして `import` でき、React ラッパや CDN 配布の土台になる。eframe を載せないため wasm は軽量 (wasm-opt 未適用で約 170KB)。
+ビルド成果物 (`pkg/`) は ES モジュールとして `import` できる。
 
 ## 外部制御 API (`IchigoCrateHandle`)
 
-`IchigoCrateRunner` は描画/キー入力に加え、JS/TS から実行・入力・状態取得を行う命令ハンドルを公開する (React ではこの面を `IchigoCrateHandle` という ref 型で露出する)。`core` の公開関数へ委譲する薄いブリッジで、実行中プログラムも外部から駆動できる。
+`IchigoCrateRunner` は描画・キー入力に加え、JS/TS から実行・入力・状態取得を行うメソッドを持つ。
 
 ```js
 // storagePrefix と persist は省略可 (既定 ""/true)。
@@ -51,21 +51,18 @@ r.onError((e) => console.log(e.code, e.message)); // 実行時エラー通知 (E
 r.is_led(); // LED 点灯状態 (枠表示などフロント側で反映)
 ```
 
-実行モデル上、無限ループが常態なので「`exec()` の戻りで完了を待つ」設計は採らず、即時文は同期完了・`RUN` 等はフレーム分割実行へ委譲する。実行中は `type`/`keyDown`/`break` のみ有効 (`exec`/`run` は停止中のみ受理) で、フレーム途中に割り込まない。
+`exec` / `run` / `loadProgram` は停止中のみ受け付ける。実行中に使えるのは `type` / `keyDown` / `break` など。
 
 ## ストレージと出力
 
-- **SAVE/LOAD/FILES**: `core::machine::Storage` を Web 実装 (`WebStorage`) で差し替え。`persist=true` は localStorage (`{prefix}slot_NN` に base64 保存)、`persist=false` はセッション内のみの揮発メモリ。`storagePrefix` で複数インスタンスのスロットを分離する (同一オリジンでの共有を防ぐ)。リロード後もスロット内容は残る。
-- **onPrint**: core を改変せず VRAM 差分で画面出力を近似ストリーミングする。1 フレーム内に画面外へスクロールし切った行や LOCATE で上書きした出力は取りこぼし得るため、確実な全画面状態は `getScreenText()` を併用する。
+- **SAVE/LOAD/FILES**: `persist=true` なら localStorage に保存する (リロード後も残る)。`false` ならページを閉じると消える。`storagePrefix` で複数インスタンスのスロットを分ける
+- **onPrint**: 画面の変化から出力を近似的に流すので、取りこぼすことがある。確実な画面の内容は `getScreenText()` で取る
 
 ## GET / POST (HTTPS 通信)
 
-ichigocrate 拡張の `GET` / `POST` ([core の説明](../core/README.md#get--post-https-通信)) は、ブラウザの `fetch` で通信する。ブラウザからは接続先の IP を調べられないため、次のようにして内部ネットワークへの到達を防いでいる。
+ichigocrate 拡張の `GET` / `POST` ([core の説明](../core/README.md#get--post-https-通信)) は `fetch` で通信する。内部ネットワークへ届かないよう、独自ヘッダ `X-Ichigocrate` を付けて必ず CORS の事前確認を経由させる。
 
-- すべてのリクエストに独自ヘッダ `X-Ichigocrate: 1` を付け、必ず CORS の事前確認 (preflight) を経由させる。CORS を許可していない機器 (ルーターなど) には本番のリクエストが届かない
-- Cookie・認証情報は送らない (`credentials: "omit"`)。リダイレクトは失敗として扱う
-
-そのため、**接続先サーバーが CORS を許可していないと Network error になる**。接続先側で次のように応答する必要があり、その設定は利用者の責務とする。
+そのため、**接続先サーバーが CORS を許可していないと Network error になる**。接続先側で次のように応答する必要がある。
 
 ```
 Access-Control-Allow-Origin: <ページのオリジン または *>
@@ -77,7 +74,7 @@ Access-Control-Allow-Headers: X-Ichigocrate, Content-Type
 [kidspod](https://kidspod.club/) は CORS を許可していないため、Web 版からは取得できない (デスクトップ版では取得できる)。
 
 > [!WARNING]
-> `onPrint` が渡す文字列や `getScreenText()` の戻り値には、`GET` / `POST` で受け取ったサーバーの応答がそのまま含まれうる (外部の誰かが内容を決められる)。ページに表示するときは `textContent` などテキストとして扱い、`innerHTML` などで HTML として挿入しないこと (XSS になる)。demo は `textContent` で表示している。
+> `onPrint` や `getScreenText()` の文字列には、サーバーの応答がそのまま含まれうる。ページに出すときは `textContent` を使い、`innerHTML` で挿入しないこと (XSS になる)。
 
 ## キーボードショートカット (IchigoJam 標準準拠)
 
@@ -96,8 +93,8 @@ Access-Control-Allow-Headers: X-Ichigocrate, Content-Type
 | F10  | ローマ字 → 半角カナ変換のオン/オフ               |
 | CapsLock | 英字の大文字/小文字入力の切り替え (CAPS)      |
 
-英字は既定で大文字入力 (CAPS 既定 ON、実機と同じ)。CAPS が ON の間は Shift 併用で小文字になり、CapsLock を押すと反転する。`on_key` の第 5 引数に `KeyboardEvent.getModifierState("CapsLock")` を渡すと、その状態の変化で CAPS を反転する (macOS のブラウザは CapsLock の keydown/keyup が不規則なため、押下ではなく状態で判定する)。
+英字は既定で大文字入力 (実機と同じ)。CapsLock に追従させるには、`on_key` の第 5 引数に `KeyboardEvent.getModifierState("CapsLock")` を渡す。
 
 ## 未対応
 
-- 音声出力 (BEEP/PLAY は core 側で音程を計算するが、本フロントエンドは Web Audio 未接続)
+- 音声出力 (BEEP / PLAY は鳴らない)

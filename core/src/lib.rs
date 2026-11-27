@@ -13,6 +13,7 @@ pub mod keycodes;
 pub mod keymap;
 pub mod machine;
 pub mod net;
+pub mod paste;
 pub mod psg;
 pub mod ram;
 pub mod render;
