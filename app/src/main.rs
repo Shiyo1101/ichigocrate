@@ -4,10 +4,12 @@
 //! - キーボード入力を IchigoJam の制御コードに変換してマシンに渡す
 //! - PSG の現在周波数を矩形波として cpal で再生
 //! - ichigocrate 拡張 `GET` の HTTPS 通信 ([`http`])
+//! - プログラムの貼り付け (Cmd+V / Ctrl+V、確認モーダルつき: [`paste_dialog`])
 
 #![deny(unsafe_code)]
 
 mod http;
+mod paste_dialog;
 
 use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Arc};
@@ -31,6 +33,7 @@ use ichigocrate_core::{
     keycodes as kc,
     keymap::{backslash_key_hid, HID_BACKSLASH},
     machine::{copy_slot_data, Storage},
+    paste::prepare_paste,
     render::{cursor_blink_phase, render_mono, RenderState, CURSOR_BLINK_MS, IMG_H, IMG_W},
     session::Session,
     Machine,
@@ -163,6 +166,8 @@ struct IchigoApp {
     start_time: Instant,
     /// タイトル更新差分用に持つ直前フレームのカナモード状態
     was_kana_mode: bool,
+    /// 貼り付けの確認モーダル。開いている間はキー入力を BASIC へ渡さない。
+    paste_dialog: Option<paste_dialog::PasteDialog>,
 }
 
 impl IchigoApp {
@@ -181,6 +186,7 @@ impl IchigoApp {
             _audio_stream: audio_stream,
             start_time: Instant::now(),
             was_kana_mode: false,
+            paste_dialog: None,
         }
     }
 }
@@ -189,16 +195,25 @@ impl App for IchigoApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = Instant::now();
 
-        process_keyboard(ctx, &mut self.session);
-
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.session.on_escape();
+        // Cmd+V / Ctrl+V: いきなり打ち込まず、確認モーダルを開く (開いていれば中身を差し替える)
+        if let Some(text) = take_pasted_text(ctx) {
+            self.paste_dialog = Some(paste_dialog::PasteDialog::new(prepare_paste(&text)));
+            // モーダルの間は離したキーを受け取れないので、押下状態 (BTN) を消しておく
+            self.session.machine.key_clear_down();
         }
 
-        // F1-F9 のコマンド割当。受理条件 (REPL 待機中のみ) は Session が判定する。
-        let fkey = ctx.input(|i| FKEYS.iter().position(|k| i.key_pressed(*k)));
-        if let Some(idx) = fkey {
-            let _ = self.session.press_fkey(idx as u8 + 1);
+        if self.paste_dialog.is_none() {
+            process_keyboard(ctx, &mut self.session);
+
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                self.session.on_escape();
+            }
+
+            // F1-F9 のコマンド割当。受理条件 (REPL 待機中のみ) は Session が判定する。
+            let fkey = ctx.input(|i| FKEYS.iter().position(|k| i.key_pressed(*k)));
+            if let Some(idx) = fkey {
+                let _ = self.session.press_fkey(idx as u8 + 1);
+            }
         }
 
         // 60Hz tick・WAIT 期限・実行中プログラムの継続はすべて Session が担う。
@@ -261,7 +276,37 @@ impl App for IchigoApp {
                     });
                 }
             });
+
+        if let Some(dialog) = &mut self.paste_dialog {
+            match dialog.show(ctx, self.session.is_running()) {
+                Some(paste_dialog::PasteAction::Confirm(bytes)) => {
+                    // 実行中・INPUT 待ち・通信待ちなら止めてから (ESC 相当) 打ち込む。
+                    // ESC は流し込み待ちの入力を消すので、先に止めてから積む。
+                    if self.session.is_running() || self.session.is_awaiting_input() {
+                        self.session.on_escape();
+                    }
+                    self.session.queue_paste(&bytes);
+                    self.paste_dialog = None;
+                    ctx.request_repaint();
+                }
+                Some(paste_dialog::PasteAction::Cancel) => {
+                    self.paste_dialog = None;
+                    ctx.request_repaint();
+                }
+                None => {}
+            }
+        }
     }
+}
+
+/// このフレームで貼り付けられた文字列 (Cmd+V / Ctrl+V)。複数あれば最後のもの。
+fn take_pasted_text(ctx: &egui::Context) -> Option<String> {
+    ctx.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::Paste(text) => Some(text.clone()),
+            _ => None,
+        })
+    })
 }
 
 /// VRAM をテクスチャへ反映する描画器。
