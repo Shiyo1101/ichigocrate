@@ -35,16 +35,11 @@ core/
 - コマンド: PRINT (`?`), LET, IF / THEN / ELSE, FOR / NEXT, GOTO, GOSUB / RETURN (`GSB` / `RTN`), END / STOP, CONT, REM (`'`), INPUT, LIST, NEW, RUN, RENUM, RESET, HELP, OK, CLV (`CLEAR`), CLS, CLT, CLK, CLP, LOAD, SAVE, LRUN, FILES, LED, POKE, COPY, LOCATE (`LC`), SCROLL, WAIT, DRAW, BEEP, PLAY, TEMPO, SRND, VIDEO, KBD
 - 関数: ABS, RND, PEEK, INKEY, TICK, FREE, VER, LEN, FILE, LINE, POS, SOUND, BTN, SCR, VPEEK, POINT, SIN, COS, ASC, CHR$ / STR$ / DEC$ / HEX$ / BIN$
 
-移植・ホスト境界に関わる補足:
+実機との違い:
 
-- RESET — `Machine::power_on_reset` に委譲。LED・カナ入力・VIDEO 設定・PSG・乱数シードなど電源断で失われる状態も初期化する (SAVE/LOAD のストレージのみ保持)。ホストの外部リセット API ([web](../web) の `IchigoCrateHandle.reset()` 等) も同じ関数を使う
-- INPUT — `Session` 経由なら Enter (`on_enter`) で値が確定し、ESC (`on_escape`) で中断される。`Machine` を直接使う場合は `is_awaiting_input` で入力待ちを検知し、確定行を `input_complete` へ渡す
-- WAIT — 実時間での待機は `Session` が管理する ([アーキテクチャ要点](#アーキテクチャ要点) 参照)。実機と同じく ESC で待機を打ち切って中断する
-- LIST — 画面に収まらない量は、画面 1 枚分 (画面の行数 - 1) ごとに 40 フレーム (約 0.67 秒) 止めながら表示する。ESC で中断できる (実機と同じ)
-- ASC — 元ファーム同様 PEEK の別名。文字列リテラルは自身のアドレスに評価されるため `ASC("A")` は 65 になる
-- LED — 状態を `Machine` に保持するのみで、点灯の表現はホスト側の責務
-- VIDEO — 拡大時は `screen_cols()` / `screen_rows()` 自体が縮む (`32/24 >> 拡大段階`) ため、ホスト側も折り返しやカーソル範囲の計算にこの値を使う。clkdiv 引数 (実機の省電力用クロック分周) は読み飛ばす
-- KBD — 実機はフラッシュへ保存するが本移植はメモリ内のみ (既定は JA)。`VER(2)` で現在値を返す
+- LED — 状態を持つだけで、点灯の表現 (画面の枠など) はフロントエンドが行う
+- VIDEO — clkdiv 引数 (実機の省電力用クロック分周) は読み飛ばす
+- KBD — 設定はメモリ内のみ (実機はフラッシュへ保存する)
 
 ### 未実装
 
@@ -61,23 +56,15 @@ core/
 GET "https://kidspod.club/mj/2245"
 POST "https://example.com/room/1","MOVE 3"
 POST "https://example.com/room/1",#800,16
-GET "https://example.com/room/1",#1200,2048
 ```
 
-指定した URL へ HTTPS で GET / POST を送り、届いたレスポンスを解釈せずにそのまま扱う。URL は文字列リテラルのほか、文字列を置いた RAM のアドレスでも渡せる。
+指定した URL へ HTTPS で GET / POST を送る。URL と本文は文字列か、それを置いた RAM のアドレスで渡す。`POST url,アドレス,長さ` なら RAM 上のバイト列をそのまま送る (2KB まで)。
 
-POST の本文は次のどちらか。どちらも IchigoJam の文字コードのままのバイト列で、`Content-Type: application/octet-stream` として送る。
+レスポンスは解釈せずに次のように扱う。届くまで実行は止まり、ESC で中断できる。
 
-- `POST url,文字列` — 文字列 (リテラルまたはそのアドレス) を送る
-- `POST url,アドレス,長さ` — RAM 上の `長さ` バイトをそのまま送る (NUL や `"` も含められる)。本文は 2KB (`net::MAX_REQUEST_BYTES`) まで、長さが負・RAM の外にかかる・上限を超える場合は Illegal argument
-
-レスポンスの扱いは GET も POST も同じ。末尾に `,書き込み先,最大長` を付けると、レスポンスをメモリへ書き込む (下記)。付けない場合は次のとおり。
-
-- 即時実行 (REPL で直接打ったとき) — レスポンスをキー入力として流し込む。改行ごとに Enter を押した扱いになるので、行番号付きの行はプログラムとして登録され、それ以外の行はその場で実行される ([kidspod](https://kidspod.club/) の `/mj/<プログラムID>` からプログラムを取り込める)
-- プログラム実行中 — レスポンスを画面へ出力し、次の文へ進む
-- レスポンスが届くまで実行は止まる。ESC で中断できる (Break)
-- CR (`\r`) は捨てる
-- HTTP のステータスが 2xx 以外 (404・500 など) なら、本文は使わずに `HTTP 404` のようにステータスを表示して Network error で止める
+- 即時実行 — キー入力として流し込む。行番号付きの行はプログラムとして登録される ([kidspod](https://kidspod.club/) の `/mj/<プログラムID>` から取り込める)
+- プログラム実行中 — 画面へ出力する
+- ステータスが 2xx 以外なら `HTTP 404` のように表示して Network error で止める
 
 #### レスポンスをメモリへ書き込む
 
@@ -87,18 +74,10 @@ POST url,"文字列",書き込み先,最大長
 POST url,送信元,長さ,書き込み先,最大長
 ```
 
-- レスポンスを画面にもキー入力にも出さず、書き込み先へそのまま (CR も含めて) 書き込む。最大長に空きがあれば後ろに NUL を付けるので、`?STR$(#1200)` で表示できる
-- 書き込んだ長さは `NET()` で読める (0 を含むバイナリでもわかる)。一度も書き込んでいなければ 0 (`NET GET` / `NET POST` の通信中は -1、失敗は -2。下記)
-- レスポンスが最大長より長ければ、途中で切らずに何も書かず Out of memory で止める
-- 書き込み先は RAM のどこでもよい (POKE と同じ)。範囲が RAM の外にかかる・最大長が負なら Illegal argument
-- 書き込み先には、ゲームの変数や PCG と衝突しない **NET 領域 `#1200`〜`#19FF` (2KB)** を使うとよい。PEEK・POKE・COPY でほかの RAM と同じように扱え、NEW や RUN では消えず、RESET で消える。`HELP` にも表示する
-
-```basic
-10 POST "https://relay.example/room/42","D3",#1200,2048
-20 GET "https://relay.example/room/42",#1200,2048
-30 IF NET()=0 WAIT 60:GOTO 20
-40 ?STR$(#1200)
-```
+- 画面にもキー入力にも出さず、書き込み先へそのまま書き込む。空きがあれば後ろに NUL を付ける (`?STR$(#1200)` で表示できる)
+- 書き込んだ長さは `NET()` で読める
+- 最大長より長いレスポンスは書き込まず Out of memory で止める
+- 書き込み先には **NET 領域 `#1200`〜`#19FF` (2KB, ichigocrate 独自)** を使うとよい。ゲームの変数や PCG と衝突せず、RESET でだけ消える
 
 #### 待たずに進める (`NET GET` / `NET POST`)
 
@@ -108,11 +87,9 @@ NET POST url,"文字列",書き込み先,最大長
 NET POST url,送信元,長さ,書き込み先,最大長
 ```
 
-- 頭に `NET` を付けると、レスポンスを待たずに次の文へ進む (ゲームのループを止めずに通信できる)。書き込み先は必須
-- 通信中は `NET()` が -1。終わればメモリへ書き込み `NET()` が書き込んだ長さになる。失敗すれば `NET()` が -2 になり、メモリは変えない
-- 失敗 (通信失敗・タイムアウト・2xx 以外のステータス・最大長に入りきらない) でもプログラムは止めず、何も表示しない。BASIC 側で `NET()` を見て判断する
-- リクエストは同時に 1 つだけ。通信中に次の `GET` / `POST` / `NET GET` / `NET POST` を出すと、前のものは取り消され、`NET()` はいったん -2 になる (新しいものが `NET GET` / `NET POST` ならすぐ -1)
-- ESC でプログラムを止めても通信は続き、終われば書き込む
+- 頭に `NET` を付けると、レスポンスを待たずに次の文へ進む。書き込み先は必須
+- `NET()` は通信中 -1、終われば書き込んだ長さ、失敗すれば -2。失敗してもプログラムは止めない
+- リクエストは同時に 1 つだけ。通信中に次を出すと前のものは取り消される
 
 ```basic
 10 NET GET "https://relay.example/room/42",#1200,2048
@@ -122,20 +99,18 @@ NET POST url,送信元,長さ,書き込み先,最大長
 50 ?STR$(#1200)
 ```
 
-制限と安全のための仕様:
+制限:
 
-- https のみ。`https://` で始まらない URL は Illegal argument
-- 内部ネットワーク (ループバック・プライベート・リンクローカルなど) へはつながない。URL に直接書かれた IP アドレスや `localhost` は core が Illegal argument にし、名前解決後の検査は各フロントエンドが行う
-- レスポンスは 2KB (`net::MAX_RESPONSE_BYTES`) まで、応答待ちは 10 秒 (`net::REQUEST_TIMEOUT_MS`) まで。超えた場合や通信に失敗した場合は Network error
-- リダイレクトは追わず、Cookie・認証情報は送らない
+- https のみ。内部ネットワーク (localhost・プライベートアドレスなど) へはつながない
+- レスポンスは 2KB まで、応答待ちは 10 秒まで。リダイレクトは追わず、Cookie は送らない
 
-通信そのものはホストが `net::HttpClient` を実装して `Machine::set_http_client` で設定する。未設定なら Network error。
+通信そのものはホストが `net::HttpClient` を実装して `Machine::set_http_client` で設定する。
 
 ### 拡張エラー
 
-| 番号 | メッセージ    | 内容                                                                    |
-| ---- | ------------- | ----------------------------------------------------------------------- |
-| 13   | Network error | GET・POST の通信失敗 (接続不可・タイムアウト・上限超過・2xx 以外のステータス) |
+| 番号 | メッセージ    | 内容                 |
+| ---- | ------------- | -------------------- |
+| 13   | Network error | GET・POST の通信失敗 |
 
 ## テスト
 
@@ -143,15 +118,9 @@ NET POST url,送信元,長さ,書き込み先,最大長
 cargo test -p ichigocrate-core
 ```
 
-テストは `tests/` 以下に機能別のファイルとして置き (式評価・エラー・制御構文・コマンド・画面編集・描画・セッション・通信など)、共通ヘルパーは `tests/common/mod.rs` にまとめている。キー変換表 (`keymap.rs`) やローマ字カナ変換 (`romajikana.rs`) の単体テストは各モジュール内にある。
-
 ## アーキテクチャ要点
 
-- 元 C コードのグローバル変数 (struct GLOBAL `_g` と RAM 領域) はすべて `Machine` 構造体に集約している。
-- PC は仮想アドレスではなく `Machine.ram` への `usize` インデックスとして扱う。仮想アドレス変換は `OFFSET_RAMROM` (0x700) を加算するだけ。
-- BASIC インタプリタは `basic_step()` で 1 文ずつ実行できる協調的設計。`basic_execute()` は RUN / GOTO で PC が LIST 領域へ移行した時点で呼出元に制御を返し、以降は `basic_step` を繰り返し呼んで実行を進める。
-- ホストは `session::Session` を通して VM を動かす。キー入力は `feed_key` / `feed_char` / `on_enter` / `on_escape` / `press_fkey` で渡し、毎フレーム `tick(now_ms)` に現在時刻 (ミリ秒) を渡す。`tick` は 1 フレームあたりの実行文数を制限してプログラムを進め (無限ループでも UI を止めない)、`TICK()` カウンタと PSG を実時間の 60Hz に合わせて進める。
-- WAIT は `Machine.wait_frames` を加算し、`Session::tick` がそれを実時間の期限に変換して待つ。フレームレートに依存しないため、高リフレッシュレート環境でも WAIT の長さは変わらない。
-- `Session` を使わずに `exec_line` / `run_to_completion` で `Machine` を直接動かすこともできる (テストやヘッドレス用途。`run_to_completion` は WAIT を無視する)。
-- ストレージは `machine::Storage` トレイトで抽象化している。ホストはこのトレイトを実装してファイル保存先を差し替える (未設定時の SAVE/LOAD は File error)。
-- 描画は `render::render_mono` が VRAM/PCG を 1bpp ビットマップへ展開するところまでを担い、色付けはホスト側で行う。
+- 元 C コードのグローバル変数と RAM は `Machine` 構造体に集約している。
+- ホストは `session::Session` を通して動かす。キー入力を `feed_key` / `on_enter` / `on_escape` などで渡し、毎フレーム `tick(now_ms)` を呼ぶ。`tick` は 1 フレームあたりの実行文数を制限し (無限ループでも UI を止めない)、WAIT と `TICK()` を実時間に合わせる。
+- テストやヘッドレス用途では `exec_line` / `run_to_completion` で `Machine` を直接動かせる (WAIT は無視する)。
+- ファイル保存先は `machine::Storage` トレイトで差し替える。描画は `render::render_mono` が 1bpp ビットマップまでを作り、色付けはホストが行う。
