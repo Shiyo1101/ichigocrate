@@ -220,6 +220,18 @@ impl Session {
         self.execute_current_line()
     }
 
+    /// 貼り付けたテキスト ([`crate::paste::prepare_paste`] で整えたバイト列) を、
+    /// 打ち込んだのと同じようにキー入力として流し込む。`GET` の応答の流し込みと同じく、
+    /// REPL で待機している間に 1 行ずつ Enter を押した扱いで入力する。ESC で残りを取り消せる。
+    pub fn queue_paste(&mut self, bytes: &[u8]) {
+        self.pending_feed.extend(bytes.iter().copied());
+    }
+
+    /// 流し込み待ちのキー入力 (貼り付け・`GET` の応答) が残っているか。
+    pub fn has_pending_input(&self) -> bool {
+        !self.pending_feed.is_empty()
+    }
+
     /// ESC キー 1 押下ぶんの処理。実行中なら Break 要求、INPUT 待ち中なら
     /// 入力を破棄して REPL へ戻る。
     pub fn on_escape(&mut self) {
